@@ -1,0 +1,31 @@
+[package]
+name = "janus"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "HTTP client with exact control over the TLS ClientHello (patched OpenSSL) and HTTP/2 framing"
+build = "build.rs"
+
+[dependencies]
+janus-h2 = { path = "../janus-h2", features = ["unstable"] }
+openssl = "0.10.81"
+openssl-sys = "0.9.117"
+foreign-types = "0.3"
+tokio = { version = "1", features = ["net", "rt", "rt-multi-thread", "io-util", "time", "macros", "sync"] }
+tokio-openssl = "0.6"
+http = "1"
+bytes = "1"
+httparse = "1"
+url = "2"
+rustls-native-certs = "0.8"
+thiserror = "2"
+log = "0.4"
+cookie_store = "0.22"
+flate2 = "1"
+brotli = "9"
+zstd = "0.14"
+tokio-socks = "0.5"
+base64 = "0.23"
+
+[dev-dependencies]
+env_logger = "0.11"

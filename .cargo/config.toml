@@ -1,0 +1,5 @@
+[env]
+X86_64_UNKNOWN_LINUX_GNU_OPENSSL_DIR = { value = "build/openssl-linux/install", relative = true }
+X86_64_PC_WINDOWS_MSVC_OPENSSL_DIR = { value = "build/openssl-msvc/install", relative = true }
+OPENSSL_STATIC = "1"
+JANUS_DEPS_MSVC = { value = "build/deps-msvc/install/lib", relative = true }

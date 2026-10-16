@@ -1,0 +1,17 @@
+[package]
+name = "janus-py"
+version = "0.2.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+janus = { path = "../janus" }
+pyo3 = { version = "0.30", features = ["abi3-py310", "extension-module"] }
+pyo3-async-runtimes = { version = "0.30", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+http = "1"
+bytes = "1"

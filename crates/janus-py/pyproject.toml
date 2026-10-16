@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "janus-requests"
+version = "0.2.0"
+description = "HTTP client with an exactly specified TLS ClientHello and HTTP/2 fingerprint"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.32,<3",
+    "urllib3>=2",
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+# self-signed certificate for python -m janus_requests.capture
+capture = ["cryptography>=42"]
+
+[project.scripts]
+janus-capture = "janus_requests.capture.__main__:main"
+
+[tool.maturin]
+module-name = "janus_requests._native"
+python-source = "python"
+features = ["pyo3/extension-module"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120

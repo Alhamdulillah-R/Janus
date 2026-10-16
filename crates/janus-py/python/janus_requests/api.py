@@ -1,0 +1,456 @@
+"""
+Module-level request functions mirroring requests.api, each on a throwaway JanusSession.
+
+Besides requests' own arguments they take the JanusSession options (janus=, http_version=, logs=) and the
+per-request extras (proxy=, priority=, header_order=, retry_num=); verify defaults to off like JanusSession.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from http.cookiejar import CookieJar
+from typing import Any
+
+from requests.models import PreparedRequest, Response
+
+from .profile import JanusProfile
+from .sessions import JanusSession
+
+
+def request(
+    method: str,
+    url: str,
+    *,
+    params: Any = None,
+    data: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.request on a throwaway JanusSession(janus, http_version=, logs=).
+    """
+    with JanusSession(janus, http_version=http_version, logs=logs) as session:
+        return session.request(
+            method=method,
+            url=url,
+            params=params,
+            data=data,
+            headers=headers,
+            cookies=cookies,
+            files=files,
+            auth=auth,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            proxies=proxies,
+            hooks=hooks,
+            stream=stream,
+            verify=verify,
+            cert=cert,
+            json=json,
+            priority=priority,
+            header_order=header_order,
+            proxy=proxy,
+            retry_num=retry_num,
+        )
+
+
+def get(
+    url: str,
+    params: Any = None,
+    *,
+    data: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.get: GET, redirects followed.
+    """
+    return request(
+        "GET",
+        url,
+        params=params,
+        data=data,
+        json=json,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )
+
+
+def options(
+    url: str,
+    *,
+    params: Any = None,
+    data: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.options: OPTIONS, redirects followed.
+    """
+    return request(
+        "OPTIONS",
+        url,
+        params=params,
+        data=data,
+        json=json,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )
+
+
+def head(
+    url: str,
+    *,
+    params: Any = None,
+    data: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = False,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.head: HEAD, redirects not followed by default.
+    """
+    return request(
+        "HEAD",
+        url,
+        params=params,
+        data=data,
+        json=json,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )
+
+
+def post(
+    url: str,
+    data: Any = None,
+    json: Any = None,
+    *,
+    params: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.post: POST with data= or json=.
+    """
+    return request(
+        "POST",
+        url,
+        data=data,
+        json=json,
+        params=params,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )
+
+
+def put(
+    url: str,
+    data: Any = None,
+    *,
+    params: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.put: PUT with data= or json=.
+    """
+    return request(
+        "PUT",
+        url,
+        data=data,
+        params=params,
+        json=json,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )
+
+
+def patch(
+    url: str,
+    data: Any = None,
+    *,
+    params: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.patch: PATCH with data= or json=.
+    """
+    return request(
+        "PATCH",
+        url,
+        data=data,
+        params=params,
+        json=json,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )
+
+
+def delete(
+    url: str,
+    *,
+    params: Any = None,
+    data: Any = None,
+    json: Any = None,
+    headers: Mapping[str, str | None] | None = None,
+    cookies: Mapping[str, str] | CookieJar | None = None,
+    files: Any = None,
+    auth: Any = None,
+    timeout: float | tuple[float | None, float | None] | None = None,
+    allow_redirects: bool = True,
+    proxies: Mapping[str, str] | None = None,
+    proxy: str | None = None,
+    hooks: Mapping[str, Any] | None = None,
+    stream: bool | None = None,
+    verify: bool | str | None = None,
+    cert: str | tuple[str, str] | None = None,
+    priority: tuple[int, int, bool] | None = None,
+    header_order: list[str] | None = None,
+    retry_num: int | None = None,
+    janus: str | JanusProfile = "chrome155",
+    http_version: str = "auto",
+    logs: Callable[[PreparedRequest, Response], Any] | None = None,
+) -> Response:
+    """
+    requests.delete: DELETE.
+    """
+    return request(
+        "DELETE",
+        url,
+        params=params,
+        data=data,
+        json=json,
+        headers=headers,
+        cookies=cookies,
+        files=files,
+        auth=auth,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        proxies=proxies,
+        proxy=proxy,
+        hooks=hooks,
+        stream=stream,
+        verify=verify,
+        cert=cert,
+        priority=priority,
+        header_order=header_order,
+        retry_num=retry_num,
+        janus=janus,
+        http_version=http_version,
+        logs=logs,
+    )

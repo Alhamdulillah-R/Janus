@@ -1,0 +1,10 @@
+/target
+/build
+/third_party
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.ruff_cache/
+.venv/
+.idea/

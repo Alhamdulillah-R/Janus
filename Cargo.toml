@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/janus-h2",
+    "crates/janus",
+    "crates/janus-py",
+]
