@@ -1,6 +1,6 @@
 [package]
 name = "janus-ffi"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.85"
 description = "C ABI over the Janus client and capture server, loaded as janus_ffi.dll / libjanus_ffi.so"

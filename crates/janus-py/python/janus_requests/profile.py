@@ -189,6 +189,12 @@ class JanusTls:
     # shuffle the extensions on every connection, as Chrome does
     permute_extensions: bool = False
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # modules generated before 0.2.1 pass ech_grease=True / False
+        if name == "ech_grease" and isinstance(value, bool):
+            value = EchGrease.from_native(value)
+        super().__setattr__(name, value)
+
     @classmethod
     def from_native(cls, data: dict[str, Any]) -> JanusTls:
         return cls(

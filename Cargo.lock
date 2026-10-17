@@ -607,7 +607,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "janus"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "brotli",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "janus-capture"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "janus",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "janus-ffi"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "http",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "janus-py"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "http",
