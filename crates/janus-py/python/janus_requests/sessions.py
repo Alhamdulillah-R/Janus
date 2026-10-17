@@ -42,6 +42,7 @@ class JanusSession(requests.Session):
         verify: bool | str = False,
         logs: Callable[[PreparedRequest, Response], Any] | None = None,
         retry_num: int = 0,
+        timeout: Any = None,
     ):
         super().__init__()
 
@@ -54,6 +55,8 @@ class JanusSession(requests.Session):
         # no default headers: only what the caller sets goes on the wire (plus Host/Content-Length/Cookie)
         self.headers = CaseInsensitiveDict(headers or {})
         self.verify = verify
+        # seconds or (connect, read) for requests that pass no timeout=
+        self.timeout = timeout
         self.proxies = proxy_map(proxies, proxy) or {}
         # never read the environment: system / env proxies would silently override proxies=
         self.trust_env = False
@@ -121,7 +124,8 @@ class JanusSession(requests.Session):
         retry_num: int | None = None,
     ) -> Response:
         """
-        requests.Session.request plus priority=(depends_on, weight, exclusive), header_order, proxy and retry_num.
+        requests.Session.request plus priority=(depends_on, weight, exclusive), header_order, proxy and retry_num;
+        timeout=None falls back to the session's timeout.
         """
         prep, send_kwargs = self.prepare_send(
             method,
@@ -196,6 +200,9 @@ class JanusSession(requests.Session):
             if not any(str(name).lower() == "content-length" for name in headers or {}):
                 prep.headers.pop("Content-Length", None)
                 prep.headers["Transfer-Encoding"] = "chunked"
+
+        if timeout is None:
+            timeout = self.timeout
 
         settings = self.merge_environment_settings(prep.url, proxy_map(proxies, proxy) or {}, stream, verify, cert)
         send_kwargs: dict[str, Any] = {
@@ -322,6 +329,7 @@ class JanusAsyncSession:
         verify: bool | str = False,
         logs: Callable[[PreparedRequest, Response], Any] | None = None,
         retry_num: int = 0,
+        timeout: Any = None,
     ):
         """
         Same options as JanusSession; logs may also be a coroutine function.
@@ -336,6 +344,7 @@ class JanusAsyncSession:
             verify=verify,
             logs=logs,
             retry_num=retry_num,
+            timeout=timeout,
         )
 
     def __getattr__(self, name: str) -> Any:

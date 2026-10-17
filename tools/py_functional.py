@@ -565,6 +565,14 @@ def session_options(base: str, http_port: str | None, h2_echo: str | None) -> No
     )
     check("read timeout single attempt", time.monotonic() - started < 1.8, round(time.monotonic() - started, 2))
 
+    expect_raise(
+        "session timeout applies",
+        requests.ReadTimeout,
+        lambda: JanusSession(timeout=0.5).get(f"{base}/slow", params={"delay": "2"}),
+    )
+    r = JanusSession(timeout=0.5).get(f"{base}/slow", params={"delay": "1"}, timeout=5)
+    check("request timeout overrides the session", r.status_code == 200, r.status_code)
+
 
 def sct(port: str) -> None:
     """
@@ -595,6 +603,13 @@ def proxies(base: str, http_port: str, socks_port: str) -> None:
 
 
 async def run_async(base: str, h2_echo: str | None) -> None:
+    async with JanusAsyncSession(timeout=0.5) as slow:
+        try:
+            await slow.get(f"{base}/slow", params={"delay": "2"})
+            check("async session timeout applies", False, "no exception")
+        except requests.ReadTimeout as e:
+            check("async session timeout applies", True, type(e).__name__)
+
     async with requests.AsyncSession() as s:
         responses = await asyncio.gather(*(s.get(f"{h2probe}/api/get", params={"i": i}) for i in range(5)))
         check(

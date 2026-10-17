@@ -20,6 +20,7 @@ with JanusSession(janus="chrome155", headers={"User-Agent": "..."}, proxy="http:
 - `verify` 默认关，不读环境变量和系统代理
 - `janus=` 接受内置名 `chrome155` 或 `JanusProfile`
 - `logs=func(req, resp)` 每个响应回调一次，`retry_num=` 只重试连接类错误
+- `timeout=` 可以设在 session 上（秒数或 `(connect, read)`），请求级 `timeout=` 优先
 - 请求级 `headers=` 覆盖 session 的同名头，值为 `None` 表示这次不发
 - `JanusAsyncSession` 是 asyncio 版本；`import janus_requests as requests` 可当 requests 用
 

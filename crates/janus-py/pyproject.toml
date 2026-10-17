@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "janus-requests"
-version = "0.2.2"
+version = "0.2.3"
 description = "HTTP client with an exactly specified TLS ClientHello and HTTP/2 fingerprint"
 readme = "README.md"
 requires-python = ">=3.10"
