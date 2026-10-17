@@ -6,14 +6,25 @@ build-backend = "maturin"
 name = "janus-requests"
 version = "0.2.0"
 description = "HTTP client with an exactly specified TLS ClientHello and HTTP/2 fingerprint"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "licenses/*"]
+authors = [{ name = "Mignon Rex" }]
+keywords = ["requests", "tls", "ja3", "ja4", "http2", "fingerprint", "impersonate"]
 dependencies = [
     "requests>=2.32,<3",
     "urllib3>=2",
 ]
 classifiers = [
-    "Programming Language :: Rust",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Internet :: WWW/HTTP",
 ]
 
 [project.optional-dependencies]
