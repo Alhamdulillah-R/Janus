@@ -1,0 +1,20 @@
+[package]
+name = "janus-ffi"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "C ABI over the Janus client and capture server, loaded as janus_ffi.dll / libjanus_ffi.so"
+publish = false
+
+[lib]
+name = "janus_ffi"
+crate-type = ["cdylib"]
+
+[dependencies]
+janus = { path = "../janus" }
+janus-capture = { path = "../janus-capture" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+http = "1"
+bytes = "1"

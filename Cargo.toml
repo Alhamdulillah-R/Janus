@@ -4,4 +4,6 @@ members = [
     "crates/janus-h2",
     "crates/janus",
     "crates/janus-py",
+    "crates/janus-capture",
+    "crates/janus-ffi",
 ]

@@ -1,0 +1,18 @@
+[package]
+name = "janus-capture"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Local HTTPS server that captures a browser's ClientHello and HTTP/2 framing as Janus profiles"
+publish = false
+
+[dependencies]
+janus = { path = "../janus" }
+janus-h2 = { path = "../janus-h2", features = ["unstable"] }
+openssl = "0.10.81"
+tokio = { version = "1", features = ["net", "rt", "io-util", "time", "macros", "sync"] }
+tokio-openssl = "0.6"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"

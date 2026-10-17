@@ -17,6 +17,7 @@ const MAYBE_EOS: u8 = 1;
 const DECODED: u8 = 2;
 const ERROR: u8 = 4;
 
+/// Decode a Huffman-coded string literal into buf and return the decoded octets.
 pub fn decode(src: &[u8], buf: &mut BytesMut) -> Result<BytesMut, DecoderError> {
     let mut decoder = Decoder::new();
 
@@ -46,6 +47,7 @@ pub fn encoded_len(src: &[u8]) -> usize {
     bits.div_ceil(8)
 }
 
+/// Huffman-encode src into dst.
 pub fn encode(src: &[u8], dst: &mut BytesMut) {
     let mut bits: u64 = 0;
     let mut bits_left = 40;

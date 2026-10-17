@@ -136,7 +136,7 @@ mod share;
 pub mod fuzz_bridge;
 
 pub use crate::error::{Error, Reason};
-pub use crate::hpack::{HpackPolicy, Huffman, Indexing};
+pub use crate::hpack::{HpackPolicy, Huffman, Indexing, huffman};
 pub use crate::share::{FlowControl, Ping, PingPong, Pong, RecvStream, SendStream, StreamId};
 
 #[cfg(feature = "unstable")]

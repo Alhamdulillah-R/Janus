@@ -5,6 +5,8 @@
 - `crates/janus`：客户端核心（HTTP/1.1、HTTP/2、TLS 会话复用、代理、流式上传）
 - `crates/janus-h2`：fork 自 [http2](https://github.com/0x676e67/http2) 0.5.20（它本身是 [h2](https://github.com/hyperium/h2) 的 fork），加了单请求优先级和 HPACK 编码控制
 - `crates/janus-py`：PyO3 绑定和 Python 包 `janus_requests`（含本地浏览器抓取服务器 `janus-capture`）
+- `crates/janus-capture`：抓取服务器的 Rust 实现（ClientHello/JA4、HTTP/2 帧与 HPACK 解析、ProfileBuilder）
+- `crates/janus-ffi`：C ABI 动态库 `janus_ffi.dll`，给不能自己链 OpenSSL 的宿主用（Vertumnus 的 Janus 引擎）
 - `patches/openssl`：给 OpenSSL 4.0.3 的 ClientHello 补丁（扩展顺序、GREASE、ALPS、原始扩展等）
 - `tools`：测试服务器和功能测试脚本
 
@@ -52,6 +54,25 @@ git clone -b v1.5.7 https://github.com/facebook/zstd third_party/zstd
 ## 测试
 
 `tools/py-run.ps1`（Windows）和 `tools/py-run.sh`（Linux）会编译、起本地测试服务器和代理，跑 `tools/py_functional.py`。
+
+## C ABI（janus_ffi）
+
+`cargo build --release -p janus-ffi` 产出 `target/release/janus_ffi.dll`，OpenSSL 静态链在里面，只导出 `janus_*`。所有 JSON 都是 UTF-8，库返回的 `JanusBuffer {ptr, len}` 用 `janus_buffer_free` 释放。
+
+| 函数 | 作用 |
+|---|---|
+| `janus_abi_version() -> u32` | ABI 版本，当前 1 |
+| `janus_builtin_profiles() -> JanusBuffer` | `[{"name", "profile"}]` |
+| `janus_profile_check(json, len, *out) -> i32` | 校验 profile JSON，成功时 out 是 `{"name", "akamai"}` |
+| `janus_client_new(json, len, *client, *err) -> i32` | `{"profile", "proxy", "timeout_ms", "connect_timeout_ms", "verify"}`；不跟重定向、不管 cookie、不解压 |
+| `janus_send(client, req, len, body, len, done, ctx) -> u64` | `{"method", "url", "headers", "header_order"}`，`done` 恰好回调一次 |
+| `janus_cancel(client, id)` | 取消，回调里 kind 为 `cancelled` |
+| `janus_client_free(client)` | 释放 client |
+| `janus_capture_start(json, len, *capture, *err) -> i32` | `{"listen", "name", "cert_pem", "key_pem", "rounds"}` |
+| `janus_capture_snapshot(capture) -> JanusBuffer` | `{"listen", "name", "captures", "log"}` |
+| `janus_capture_stop(capture)` | 停止并释放 |
+
+profile JSON 与 `JanusProfile.to_json()` 同一格式，两边可以互相读。
 
 ## 许可证
 

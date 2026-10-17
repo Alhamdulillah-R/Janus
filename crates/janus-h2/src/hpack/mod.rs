@@ -1,7 +1,8 @@
 mod decoder;
 mod encoder;
 pub(crate) mod header;
-pub(crate) mod huffman;
+/// HPACK Huffman code (RFC 7541 Appendix B).
+pub mod huffman;
 pub(crate) mod policy;
 mod table;
 
