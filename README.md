@@ -3,7 +3,7 @@
 可精确控制 TLS ClientHello 与 HTTP/2 帧的 HTTP 客户端：Rust 核心 + requests 兼容的 Python 包 `janus_requests`。
 
 - `crates/janus`：客户端核心（HTTP/1.1、HTTP/2、TLS 会话复用、代理、流式上传）
-- `crates/janus-h2`：从 h2 0.5.20 fork 的 HTTP/2 实现，加了单请求优先级和 HPACK 编码控制
+- `crates/janus-h2`：fork 自 [http2](https://github.com/0x676e67/http2) 0.5.20（它本身是 [h2](https://github.com/hyperium/h2) 的 fork），加了单请求优先级和 HPACK 编码控制
 - `crates/janus-py`：PyO3 绑定和 Python 包 `janus_requests`（含本地浏览器抓取服务器 `janus-capture`）
 - `patches/openssl`：给 OpenSSL 4.0.3 的 ClientHello 补丁（扩展顺序、GREASE、ALPS、原始扩展等）
 - `tools`：测试服务器和功能测试脚本
@@ -52,3 +52,9 @@ git clone -b v1.5.7 https://github.com/facebook/zstd third_party/zstd
 ## 测试
 
 `tools/py-run.ps1`（Windows）和 `tools/py-run.sh`（Linux）会编译、起本地测试服务器和代理，跑 `tools/py_functional.py`。
+
+## 许可证
+
+- 本仓库代码以 MIT 发布，见 `LICENSE`
+- `crates/janus-h2` 沿用上游 http2 / h2 的 MIT 许可证，见 `crates/janus-h2/LICENSE`
+- `patches/openssl` 是 OpenSSL 的衍生作品，按 OpenSSL 的 Apache-2.0 许可证发布；静态链接了 OpenSSL 的二进制分发时需附带其许可证
