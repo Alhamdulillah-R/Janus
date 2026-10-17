@@ -1,9 +1,9 @@
 diff --git a/include/openssl/janus.h b/include/openssl/janus.h
 new file mode 100644
-index 0000000..c1b2e60
+index 0000000..b8f483d
 --- /dev/null
 +++ b/include/openssl/janus.h
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,122 @@
 +/*
 + * Janus: client-side ClientHello shaping on top of OpenSSL.
 + *
@@ -54,6 +54,13 @@ index 0000000..c1b2e60
 +
 +/**
 + * Send extension |type| with this exact body instead of OpenSSL's own encoding.
++ *
++ * For a type OpenSSL implements, the body also sets what OpenSSL expects back (ALPN list, OCSP
++ * request, max_fragment_length, certificate compression, certificate types, post-handshake auth,
++ * server_name), so the server's answer is accepted; a body that does not parse leaves that state
++ * alone. key_share, pre_shared_key, early_data and next_protocol_negotiation are refused: their
++ * content is tied to keys or callbacks of the handshake. A raw cookie gives way to the cookie of a
++ * HelloRetryRequest.
 + */
 +int SSL_CTX_janus_set_raw_extension(SSL_CTX *ctx, uint16_t type,
 +    const unsigned char *data, size_t len);
@@ -72,6 +79,16 @@ index 0000000..c1b2e60
 +int SSL_CTX_janus_set_flags(SSL_CTX *ctx, uint32_t flags);
 +int SSL_janus_set_flags(SSL *s, uint32_t flags);
 +uint32_t SSL_janus_get_flags(const SSL *s);
++
++/**
++ * Shape ECH GREASE (sent under SSL_OP_ECH_GREASE): the HPKE suite and the payload lengths one is
++ * drawn from per ClientHello; n == 0 restores OpenSSL's own (X25519, HKDF-SHA256, AES-128-GCM,
++ * 144/176/208/240).
++ */
++int SSL_CTX_janus_set_ech_grease(SSL_CTX *ctx, uint16_t kem, uint16_t kdf,
++    uint16_t aead, const uint16_t *payload_lengths, size_t n);
++int SSL_janus_set_ech_grease(SSL *s, uint16_t kem, uint16_t kdf, uint16_t aead,
++    const uint16_t *payload_lengths, size_t n);
 +
 +/**
 + * Enable in OpenSSL itself the ciphers, groups (with key shares), sigalgs and versions named by the wire lists.
@@ -136,12 +153,114 @@ index e823a0f..3cb904a 100644
          tls_depr.c
  
  # For shared builds we need to include the libcrypto packet.c and quic_vlint.c
+diff --git a/ssl/ech/ech_internal.c b/ssl/ech/ech_internal.c
+index 1506949..384aff1 100644
+--- a/ssl/ech/ech_internal.c
++++ b/ssl/ech/ech_internal.c
+@@ -297,21 +297,33 @@ int ossl_ech_send_grease(SSL_CONNECTION *s, WPACKET *pkt)
+     size_t senderpub_len = OSSL_ECH_MAX_GREASE_PUB;
+     size_t cipher_len = 0, cipher_len_jitter = 0;
+     unsigned char cid, senderpub[OSSL_ECH_MAX_GREASE_PUB];
+-    unsigned char cipher[OSSL_ECH_MAX_GREASE_CT];
++    unsigned char *cipher = NULL;
++    const JANUS_ECH_GREASE *janus = &s->janus.ech_grease;
+     SSL_CTX *sctx = SSL_CONNECTION_GET_CTX(s);
+ 
+     if (!WPACKET_get_total_written(pkt, &pp_at_start)) {
+         SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
+         return 0;
+     }
+-    /* randomly select cipher_len to be one of 144, 176, 208, 244 */
+-    if (RAND_bytes_ex(sctx->libctx, &cid, 1, 0) <= 0) {
+-        SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
+-        return 0;
++    if (janus->payload_lengths_n > 0) {
++        /* Janus: the configured suite and one of the configured payload lengths */
++        uint32_t pick;
++
++        if (RAND_bytes_ex(sctx->libctx, (unsigned char *)&pick, sizeof(pick), 0) <= 0) {
++            SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
++            return 0;
++        }
++        cipher_len = janus->payload_lengths[pick % janus->payload_lengths_n];
++    } else {
++        /* randomly select cipher_len to be one of 144, 176, 208, 244 */
++        if (RAND_bytes_ex(sctx->libctx, &cid, 1, 0) <= 0) {
++            SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
++            return 0;
++        }
++        cipher_len_jitter = cid % 4;
++        cipher_len = 144;
++        cipher_len += 32 * cipher_len_jitter;
+     }
+-    cipher_len_jitter = cid % 4;
+-    cipher_len = 144;
+-    cipher_len += 32 * cipher_len_jitter;
+     /* generate a random (1 octet) client id */
+     if (RAND_bytes_ex(sctx->libctx, &cid, 1, 0) <= 0) {
+         SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
+@@ -319,20 +331,30 @@ int ossl_ech_send_grease(SSL_CONNECTION *s, WPACKET *pkt)
+     }
+     s->ext.ech.attempted_cid = cid;
+     hpke_suite_in_p = &hpke_suite;
+-    if (s->ext.ech.grease_suite != NULL) {
++    if (janus->payload_lengths_n > 0) {
++        hpke_suite_in.kem_id = janus->kem;
++        hpke_suite_in.kdf_id = janus->kdf;
++        hpke_suite_in.aead_id = janus->aead;
++        hpke_suite_in_p = &hpke_suite_in;
++    } else if (s->ext.ech.grease_suite != NULL) {
+         if (OSSL_HPKE_str2suite(s->ext.ech.grease_suite, &hpke_suite_in) != 1) {
+             SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
+             return 0;
+         }
+         hpke_suite_in_p = &hpke_suite_in;
+     }
++    cipher = OPENSSL_malloc(cipher_len);
++    if (cipher == NULL) {
++        SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_CRYPTO_LIB);
++        return 0;
++    }
+     if (OSSL_HPKE_get_grease_value(hpke_suite_in_p, &hpke_suite,
+             senderpub, &senderpub_len,
+             cipher, cipher_len,
+             sctx->libctx, sctx->propq)
+         != 1) {
+         SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
+-        return 0;
++        goto err;
+     }
+     if (!WPACKET_put_bytes_u16(pkt, s->ext.ech.attempted_type)
+         || !WPACKET_start_sub_packet_u16(pkt)
+@@ -344,8 +366,10 @@ int ossl_ech_send_grease(SSL_CONNECTION *s, WPACKET *pkt)
+         || !WPACKET_sub_memcpy_u16(pkt, cipher, cipher_len)
+         || !WPACKET_close(pkt)) {
+         SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
+-        return 0;
++        goto err;
+     }
++    OPENSSL_free(cipher);
++    cipher = NULL;
+     /* record the ECH sent so we can re-tx same if we hit an HRR */
+     OPENSSL_free(s->ext.ech.sent);
+     if (!WPACKET_get_total_written(pkt, &pp_at_end)) {
+@@ -368,6 +392,10 @@ int ossl_ech_send_grease(SSL_CONNECTION *s, WPACKET *pkt)
+     }
+     OSSL_TRACE_END(TLS);
+     return 1;
++
++err:
++    OPENSSL_free(cipher);
++    return 0;
+ }
+ 
+ /*
 diff --git a/ssl/janus.c b/ssl/janus.c
 new file mode 100644
-index 0000000..1d2fc60
+index 0000000..c377d6e
 --- /dev/null
 +++ b/ssl/janus.c
-@@ -0,0 +1,901 @@
+@@ -0,0 +1,1240 @@
 +/*
 + * Janus: client-side ClientHello shaping on top of OpenSSL.
 + *
@@ -152,6 +271,7 @@ index 0000000..1d2fc60
 + */
 +
 +#include <string.h>
++#include <openssl/hpke.h>
 +#include <openssl/rand.h>
 +#include "ssl_local.h"
 +#include "internal/ssl_unwrap.h"
@@ -180,6 +300,8 @@ index 0000000..1d2fc60
 +    OPENSSL_free(cfg->alps);
 +    cfg->alps = NULL;
 +    cfg->alps_n = 0;
++    OPENSSL_free(cfg->ech_grease.payload_lengths);
++    memset(&cfg->ech_grease, 0, sizeof(cfg->ech_grease));
 +    cfg->flags = 0;
 +}
 +
@@ -209,6 +331,11 @@ index 0000000..1d2fc60
 +                src->alps[i].settings_len))
 +            goto err;
 +    }
++    if (src->ech_grease.payload_lengths_n > 0
++        && !ossl_janus_config_set_ech_grease(dst, src->ech_grease.kem,
++            src->ech_grease.kdf, src->ech_grease.aead,
++            src->ech_grease.payload_lengths, src->ech_grease.payload_lengths_n))
++        goto err;
 +
 +    if (src->raw_n == 0)
 +        return 1;
@@ -306,6 +433,21 @@ index 0000000..1d2fc60
 +}
 +
 +/**
++ * Whether a built-in type's content is tied to keys or callbacks of the handshake, so a fixed body cannot work.
++ */
++static int janus_raw_refused(uint16_t type)
++{
++    if (type == TLSEXT_TYPE_key_share || type == TLSEXT_TYPE_psk
++        || type == TLSEXT_TYPE_early_data)
++        return 1;
++#ifndef OPENSSL_NO_NEXTPROTONEG
++    if (type == TLSEXT_TYPE_next_proto_neg)
++        return 1;
++#endif
++    return 0;
++}
++
++/**
 + * Register or replace the raw body for one extension type.
 + */
 +int ossl_janus_config_set_raw(JANUS_CONFIG *cfg, uint16_t type,
@@ -317,6 +459,12 @@ index 0000000..1d2fc60
 +
 +    if (len > 0xffff || (len > 0 && data == NULL) || type == JANUS_GREASE) {
 +        ERR_raise(ERR_LIB_SSL, ERR_R_PASSED_INVALID_ARGUMENT);
++        return 0;
++    }
++    if (janus_raw_refused(type)) {
++        ERR_raise_data(ERR_LIB_SSL, ERR_R_PASSED_INVALID_ARGUMENT,
++            "extension 0x%04x is tied to this handshake and cannot be sent from a raw body",
++            type);
 +        return 0;
 +    }
 +    if (len > 0) {
@@ -445,6 +593,167 @@ index 0000000..1d2fc60
 +            return raw;
 +    }
 +    return NULL;
++}
++
++/**
++ * The raw body to send for |type| in this ClientHello, or NULL when OpenSSL builds it.
++ */
++const JANUS_RAW_EXT *ossl_janus_hello_raw(const SSL_CONNECTION *s, uint16_t type)
++{
++    /* after a HelloRetryRequest the server's cookie has to go back */
++    if (type == TLSEXT_TYPE_cookie && s->ext.tls13_cookie_len > 0)
++        return NULL;
++    return ossl_janus_find_raw(&s->janus, type);
++}
++
++/**
++ * Use the host name of a raw server_name body when the connection has none (a peer given by address).
++ */
++static int janus_raw_server_name(SSL_CONNECTION *s, PACKET *body)
++{
++    PACKET list, name;
++    unsigned int type;
++
++    if (s->ext.hostname != NULL
++        || !PACKET_as_length_prefixed_2(body, &list)
++        || !PACKET_get_1(&list, &type)
++        || type != TLSEXT_NAMETYPE_host_name
++        || !PACKET_get_length_prefixed_2(&list, &name)
++        || PACKET_remaining(&name) == 0
++        || PACKET_contains_zero_byte(&name))
++        return 1;
++    return PACKET_strndup(&name, &s->ext.hostname);
++}
++
++/**
++ * Expect the max_fragment_length code a raw body asked for.
++ */
++static int janus_raw_max_fragment_length(SSL_CONNECTION *s, PACKET *body)
++{
++    unsigned int mode;
++
++    if (PACKET_remaining(body) == 1 && PACKET_get_1(body, &mode)
++        && IS_MAX_FRAGMENT_LENGTH_EXT_VALID(mode))
++        s->ext.max_fragment_len_mode = (uint8_t)mode;
++    return 1;
++}
++
++#ifndef OPENSSL_NO_OCSP
++/**
++ * Expect a stapled OCSP response when a raw status_request asked for one.
++ */
++static int janus_raw_status_request(SSL_CONNECTION *s, PACKET *body)
++{
++    unsigned int type;
++
++    if (PACKET_get_1(body, &type) && type == TLSEXT_STATUSTYPE_ocsp)
++        s->ext.status_type = TLSEXT_STATUSTYPE_ocsp;
++    return 1;
++}
++#endif
++
++/**
++ * Make the protocols of a raw ALPN body the ones the server may select.
++ */
++static int janus_raw_alpn(SSL_CONNECTION *s, PACKET *body)
++{
++    PACKET list, rest, proto;
++
++    if (!PACKET_as_length_prefixed_2(body, &list) || PACKET_remaining(&list) == 0)
++        return 1;
++    rest = list;
++    while (PACKET_remaining(&rest) > 0) {
++        if (!PACKET_get_length_prefixed_1(&rest, &proto) || PACKET_remaining(&proto) == 0)
++            return 1;
++    }
++
++    if (!PACKET_memdup(&list, &s->ext.alpn, &s->ext.alpn_len))
++        return 0;
++    s->s3.alpn_sent = 1;
++    return 1;
++}
++
++#ifndef OPENSSL_NO_COMP_ALG
++/**
++ * Accept a CompressedCertificate in the algorithms of a raw compress_certificate body that this build has.
++ */
++static int janus_raw_compress_certificate(SSL_CONNECTION *s, PACKET *body)
++{
++    PACKET list;
++    int algs[TLSEXT_comp_cert_limit], seen[TLSEXT_comp_cert_limit] = { 0 };
++    unsigned int alg;
++    size_t n = 0;
++
++    if (!PACKET_as_length_prefixed_1(body, &list) || PACKET_remaining(&list) % 2 != 0)
++        return 1;
++    while (PACKET_get_net_2(&list, &alg)) {
++        if (alg == TLSEXT_comp_cert_none || alg >= TLSEXT_comp_cert_limit || seen[alg])
++            continue;
++        seen[alg] = 1;
++        algs[n++] = (int)alg;
++    }
++
++    if (n > 0 && SSL_set1_cert_comp_preference(SSL_CONNECTION_GET_SSL(s), algs, n))
++        s->ext.compress_certificate_sent = 1;
++    return 1;
++}
++#endif
++
++/**
++ * Accept the certificate type a raw client_certificate_type or server_certificate_type body offered.
++ */
++static int janus_raw_cert_type(SSL_CONNECTION *s, PACKET *body, int client)
++{
++    PACKET list;
++    unsigned char **types = client ? &s->client_cert_type : &s->server_cert_type;
++    size_t *types_len = client ? &s->client_cert_type_len : &s->server_cert_type_len;
++
++    if (!PACKET_as_length_prefixed_1(body, &list) || PACKET_remaining(&list) == 0)
++        return 1;
++    if (client)
++        s->ext.client_cert_type_ctos = OSSL_CERT_TYPE_CTOS_GOOD;
++    else
++        s->ext.server_cert_type_ctos = OSSL_CERT_TYPE_CTOS_GOOD;
++    if (*types != NULL)
++        return 1;
++    return PACKET_memdup(&list, types, types_len);
++}
++
++/**
++ * Record in OpenSSL's state what a built-in extension sent from its raw body asked for, so the answer is accepted.
++ */
++int ossl_janus_raw_sent(SSL_CONNECTION *s, const JANUS_RAW_EXT *raw)
++{
++    PACKET body;
++
++    if (!PACKET_buf_init(&body, raw->data, raw->len))
++        return 0;
++
++    switch (raw->type) {
++    case TLSEXT_TYPE_server_name:
++        return janus_raw_server_name(s, &body);
++    case TLSEXT_TYPE_max_fragment_length:
++        return janus_raw_max_fragment_length(s, &body);
++#ifndef OPENSSL_NO_OCSP
++    case TLSEXT_TYPE_status_request:
++        return janus_raw_status_request(s, &body);
++#endif
++    case TLSEXT_TYPE_application_layer_protocol_negotiation:
++        return janus_raw_alpn(s, &body);
++#ifndef OPENSSL_NO_COMP_ALG
++    case TLSEXT_TYPE_compress_certificate:
++        return janus_raw_compress_certificate(s, &body);
++#endif
++    case TLSEXT_TYPE_client_cert_type:
++        return janus_raw_cert_type(s, &body, 1);
++    case TLSEXT_TYPE_server_cert_type:
++        return janus_raw_cert_type(s, &body, 0);
++    case TLSEXT_TYPE_post_handshake_auth:
++        s->post_handshake_auth = SSL_PHA_EXT_SENT;
++        return 1;
++    default:
++        return 1;
++    }
 +}
 +
 +/**
@@ -794,10 +1103,9 @@ index 0000000..1d2fc60
 +/**
 + * Enable the wire groups in order, marking key_share layout members with '*'.
 + */
-+static int janus_sync_groups(SSL_CTX *ctx, SSL *ssl, const JANUS_CONFIG *cfg)
++static int janus_sync_groups(SSL_CTX *ctx, SSL *ssl, const JANUS_LIST *groups,
++    const JANUS_LIST *shares)
 +{
-+    const JANUS_LIST *groups = &cfg->lists[JANUS_LIST_GROUPS];
-+    const JANUS_LIST *shares = &cfg->lists[JANUS_LIST_KEY_SHARES];
 +    SSL_CTX *lookup = ctx != NULL ? ctx : SSL_get_SSL_CTX(ssl);
 +    char *buf;
 +    size_t i;
@@ -879,6 +1187,82 @@ index 0000000..1d2fc60
 +}
 +
 +/**
++ * Read the u16 list of a raw body behind a 1- or 2-byte length; GREASE values become JANUS_GREASE.
++ * Returns 1 with a list, 0 when the body is not one, -1 when out of memory.
++ */
++static int janus_raw_u16_list(const JANUS_RAW_EXT *raw, int prefix, JANUS_LIST *out)
++{
++    PACKET body, list;
++    unsigned int v;
++    size_t i = 0;
++    int ok;
++
++    memset(out, 0, sizeof(*out));
++    if (!PACKET_buf_init(&body, raw->data, raw->len))
++        return -1;
++    if (prefix == 1)
++        ok = PACKET_as_length_prefixed_1(&body, &list);
++    else
++        ok = PACKET_as_length_prefixed_2(&body, &list);
++    if (!ok || PACKET_remaining(&list) == 0 || PACKET_remaining(&list) % 2 != 0)
++        return 0;
++
++    out->n = PACKET_remaining(&list) / 2;
++    out->values = OPENSSL_malloc_array(out->n, sizeof(uint16_t));
++    if (out->values == NULL)
++        return -1;
++    while (PACKET_get_net_2(&list, &v)) {
++        if ((v & 0x0f0f) == 0x0a0a && (v >> 8) == (v & 0xff))
++            v = JANUS_GREASE;
++        out->values[i++] = (uint16_t)v;
++    }
++    return 1;
++}
++
++/**
++ * Let raw supported_groups, signature_algorithms and supported_versions bodies decide what OpenSSL accepts.
++ */
++static int janus_sync_raw(SSL_CTX *ctx, SSL *ssl, const JANUS_CONFIG *cfg,
++    CERT *cert)
++{
++    static const struct {
++        uint16_t type;
++        int prefix;
++    } synced[] = {
++        { TLSEXT_TYPE_supported_groups, 2 },
++        { TLSEXT_TYPE_signature_algorithms, 2 },
++        { TLSEXT_TYPE_supported_versions, 1 },
++    };
++    size_t i;
++
++    for (i = 0; i < OSSL_NELEM(synced); i++) {
++        const JANUS_RAW_EXT *raw = ossl_janus_find_raw(cfg, synced[i].type);
++        JANUS_LIST list;
++        int ok, got;
++
++        if (raw == NULL)
++            continue;
++        got = janus_raw_u16_list(raw, synced[i].prefix, &list);
++        if (got < 0)
++            return 0;
++        /* a body that is not a list leaves OpenSSL's settings alone */
++        if (got == 0)
++            continue;
++
++        if (synced[i].type == TLSEXT_TYPE_supported_groups)
++            ok = janus_sync_groups(ctx, ssl, &list, &cfg->lists[JANUS_LIST_KEY_SHARES]);
++        else if (synced[i].type == TLSEXT_TYPE_signature_algorithms)
++            ok = janus_sync_sigalgs(cert, &list);
++        else
++            ok = janus_sync_versions(ctx, ssl, &list);
++        OPENSSL_free(list.values);
++        if (!ok)
++            return 0;
++    }
++    return 1;
++}
++
++/**
 + * Configure OpenSSL's own cipher, group, sigalg and version settings from the wire lists.
 + */
 +static int janus_sync_internal(SSL_CTX *ctx, SSL *ssl, const JANUS_CONFIG *cfg,
@@ -888,7 +1272,8 @@ index 0000000..1d2fc60
 +        && !janus_sync_ciphers(ctx, ssl, &cfg->lists[JANUS_LIST_CIPHERS]))
 +        return 0;
 +    if (cfg->lists[JANUS_LIST_GROUPS].values != NULL
-+        && !janus_sync_groups(ctx, ssl, cfg))
++        && !janus_sync_groups(ctx, ssl, &cfg->lists[JANUS_LIST_GROUPS],
++            &cfg->lists[JANUS_LIST_KEY_SHARES]))
 +        return 0;
 +    if (cfg->lists[JANUS_LIST_SIGALGS].values != NULL
 +        && !janus_sync_sigalgs(cert, &cfg->lists[JANUS_LIST_SIGALGS]))
@@ -896,7 +1281,7 @@ index 0000000..1d2fc60
 +    if (cfg->lists[JANUS_LIST_VERSIONS].values != NULL
 +        && !janus_sync_versions(ctx, ssl, &cfg->lists[JANUS_LIST_VERSIONS]))
 +        return 0;
-+    return 1;
++    return janus_sync_raw(ctx, ssl, cfg, cert);
 +}
 +
 +int SSL_CTX_janus_sync_internal(SSL_CTX *ctx)
@@ -1005,6 +1390,79 @@ index 0000000..1d2fc60
 +    return ossl_janus_grease(sc, which, occurrence);
 +}
 +
++/**
++ * Set the ECH GREASE suite and payload lengths; n == 0 clears them.
++ */
++int ossl_janus_config_set_ech_grease(JANUS_CONFIG *cfg, uint16_t kem,
++    uint16_t kdf, uint16_t aead, const uint16_t *payload_lengths, size_t n)
++{
++    OSSL_HPKE_SUITE suite;
++    uint16_t *copy;
++    size_t taglen, enclen, i;
++
++    if (payload_lengths == NULL || n == 0) {
++        OPENSSL_free(cfg->ech_grease.payload_lengths);
++        memset(&cfg->ech_grease, 0, sizeof(cfg->ech_grease));
++        return 1;
++    }
++
++    suite.kem_id = kem;
++    suite.kdf_id = kdf;
++    suite.aead_id = aead;
++    if (aead == OSSL_HPKE_AEAD_ID_EXPORTONLY || OSSL_HPKE_suite_check(suite) != 1) {
++        ERR_raise_data(ERR_LIB_SSL, ERR_R_PASSED_INVALID_ARGUMENT,
++            "ECH GREASE suite kem 0x%04x kdf 0x%04x aead 0x%04x is not an HPKE suite this build has",
++            kem, kdf, aead);
++        return 0;
++    }
++    taglen = OSSL_HPKE_get_ciphertext_size(suite, 1) - 1;
++    enclen = OSSL_HPKE_get_public_encap_size(suite);
++    if (enclen > JANUS_ECH_MAX_ENC) {
++        ERR_raise_data(ERR_LIB_SSL, ERR_R_PASSED_INVALID_ARGUMENT,
++            "ECH GREASE kem 0x%04x has a %u byte enc, more than %d", kem,
++            (unsigned int)enclen, JANUS_ECH_MAX_ENC);
++        return 0;
++    }
++    for (i = 0; i < n; i++) {
++        /* type, kdf, aead, config_id and the two length prefixes take 10 bytes */
++        if (payload_lengths[i] <= taglen || 10 + enclen + payload_lengths[i] > 0xffff) {
++            ERR_raise_data(ERR_LIB_SSL, ERR_R_PASSED_INVALID_ARGUMENT,
++                "ECH GREASE payload length %u must exceed the %u byte AEAD tag and fit the extension",
++                payload_lengths[i], (unsigned int)taglen);
++            return 0;
++        }
++    }
++
++    copy = OPENSSL_memdup(payload_lengths, n * sizeof(uint16_t));
++    if (copy == NULL)
++        return 0;
++    OPENSSL_free(cfg->ech_grease.payload_lengths);
++    cfg->ech_grease.kem = kem;
++    cfg->ech_grease.kdf = kdf;
++    cfg->ech_grease.aead = aead;
++    cfg->ech_grease.payload_lengths = copy;
++    cfg->ech_grease.payload_lengths_n = n;
++    return 1;
++}
++
++int SSL_CTX_janus_set_ech_grease(SSL_CTX *ctx, uint16_t kem, uint16_t kdf,
++    uint16_t aead, const uint16_t *payload_lengths, size_t n)
++{
++    return ossl_janus_config_set_ech_grease(&ctx->janus, kem, kdf, aead,
++        payload_lengths, n);
++}
++
++int SSL_janus_set_ech_grease(SSL *s, uint16_t kem, uint16_t kdf, uint16_t aead,
++    const uint16_t *payload_lengths, size_t n)
++{
++    SSL_CONNECTION *sc = SSL_CONNECTION_FROM_SSL(s);
++
++    if (sc == NULL)
++        return 0;
++    return ossl_janus_config_set_ech_grease(&sc->janus, kem, kdf, aead,
++        payload_lengths, n);
++}
++
 +int SSL_CTX_janus_set_alps(SSL_CTX *ctx, const unsigned char *proto,
 +    size_t proto_len, const unsigned char *settings, size_t settings_len)
 +{
@@ -1045,10 +1503,10 @@ index 0000000..1d2fc60
 +}
 diff --git a/ssl/janus_local.h b/ssl/janus_local.h
 new file mode 100644
-index 0000000..f4377c2
+index 0000000..6794ddc
 --- /dev/null
 +++ b/ssl/janus_local.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,119 @@
 +/*
 + * Janus: client-side ClientHello shaping on top of OpenSSL.
 + *
@@ -1072,6 +1530,9 @@ index 0000000..f4377c2
 +/* GREASE occurrences tracked per list; later occurrences wrap around */
 +#define JANUS_GREASE_PER_LIST 8
 +
++/* size of the enc buffer ossl_ech_send_grease fills (OSSL_ECH_MAX_GREASE_PUB) */
++#define JANUS_ECH_MAX_ENC 0x100
++
 +typedef struct janus_list_st {
 +    uint16_t *values;
 +    size_t n;
@@ -1090,12 +1551,22 @@ index 0000000..f4377c2
 +    size_t settings_len;
 +} JANUS_ALPS;
 +
++typedef struct janus_ech_grease_st {
++    uint16_t kem;
++    uint16_t kdf;
++    uint16_t aead;
++    /* one is drawn per ClientHello; none set keeps OpenSSL's own GREASE */
++    uint16_t *payload_lengths;
++    size_t payload_lengths_n;
++} JANUS_ECH_GREASE;
++
 +typedef struct janus_config_st {
 +    JANUS_LIST lists[JANUS_LIST_COUNT];
 +    JANUS_RAW_EXT *raw;
 +    size_t raw_n;
 +    JANUS_ALPS *alps;
 +    size_t alps_n;
++    JANUS_ECH_GREASE ech_grease;
 +    uint32_t flags;
 +} JANUS_CONFIG;
 +
@@ -1128,6 +1599,13 @@ index 0000000..f4377c2
 +    uint16_t type);
 +/* the raw body of |type| if this connection's ClientHello carried it */
 +const JANUS_RAW_EXT *ossl_janus_sent_raw(const SSL_CONNECTION *s, uint16_t type);
++/* the raw body to send for |type| in this ClientHello, NULL when OpenSSL builds it */
++const JANUS_RAW_EXT *ossl_janus_hello_raw(const struct ssl_connection_st *s,
++    uint16_t type);
++/* record in OpenSSL's state what a built-in extension sent from its raw body asked for */
++int ossl_janus_raw_sent(struct ssl_connection_st *s, const JANUS_RAW_EXT *raw);
++int ossl_janus_config_set_ech_grease(JANUS_CONFIG *cfg, uint16_t kem,
++    uint16_t kdf, uint16_t aead, const uint16_t *payload_lengths, size_t n);
 +
 +void ossl_janus_state_free(JANUS_STATE *st);
 +int ossl_janus_new_hello(struct ssl_connection_st *s);
@@ -1244,15 +1722,15 @@ index 3c6e5d0..8110323 100644
          return "TRCKU";
      case TLS_ST_CR_KEY_UPDATE:
 diff --git a/ssl/statem/extensions.c b/ssl/statem/extensions.c
-index f9abfc3..d258bb3 100644
+index f9abfc3..851ce9c 100644
 --- a/ssl/statem/extensions.c
 +++ b/ssl/statem/extensions.c
-@@ -1031,6 +1031,125 @@ int should_add_extension(SSL_CONNECTION *s, unsigned int extctx,
+@@ -1031,6 +1031,126 @@ int should_add_extension(SSL_CONNECTION *s, unsigned int extctx,
      return 1;
  }
  
 +/**
-+ * Write a Janus raw extension body, marking built-in types as sent so replies are accepted.
++ * Write a Janus raw extension body; a built-in type is marked as sent and its state follows the body, so replies are accepted.
 + */
 +static int janus_put_raw(SSL_CONNECTION *s, WPACKET *pkt,
 +    const JANUS_RAW_EXT *raw)
@@ -1269,6 +1747,10 @@ index f9abfc3..d258bb3 100644
 +            s->ext.extflags[i] |= SSL_EXT_FLAG_SENT;
 +            break;
 +        }
++    }
++    if (!ossl_janus_raw_sent(s, raw)) {
++        SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
++        return 0;
 +    }
 +    return 1;
 +}
@@ -1301,13 +1783,10 @@ index f9abfc3..d258bb3 100644
 +                break;
 +        }
 +
-+        raw = ossl_janus_find_raw(&s->janus, order[i]);
++        raw = ossl_janus_hello_raw(s, order[i]);
 +        if (raw != NULL) {
 +            if (!janus_put_raw(s, pkt, raw))
 +                return 0;
-+            /* a built-in type sent from its raw body was still requested: its answer is not unsolicited */
-+            if (j < OSSL_NELEM(ext_defs))
-+                s->ext.extflags[j] |= SSL_EXT_FLAG_SENT;
 +            continue;
 +        }
 +        if (j < OSSL_NELEM(ext_defs) && ext_defs[j].construct_ctos != NULL) {
@@ -1373,7 +1852,7 @@ index f9abfc3..d258bb3 100644
  /*
   * Construct all the extensions relevant to the current |context| and write
   * them to |pkt|. If this is an extension for a Certificate in a Certificate
-@@ -1047,6 +1166,7 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
+@@ -1047,6 +1167,7 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
      int min_version, max_version = 0, reason;
      const EXTENSION_DEFINITION *thisexd;
      int for_comp = (context & SSL_EXT_TLS1_3_CERTIFICATE_COMPRESSION) != 0;
@@ -1381,7 +1860,7 @@ index f9abfc3..d258bb3 100644
  #ifndef OPENSSL_NO_ECH
      int pass;
  #endif
-@@ -1084,10 +1204,31 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
+@@ -1084,10 +1205,31 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
          /* On the server side with initialise during ClientHello parsing */
          custom_ext_init(&s->cert->custext);
  #endif
@@ -1413,12 +1892,12 @@ index f9abfc3..d258bb3 100644
  
  #ifndef OPENSSL_NO_ECH
      /*
-@@ -1119,6 +1260,17 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
+@@ -1119,6 +1261,17 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
              if (!should_add_extension(s, thisexd->context, context, max_version))
                  continue;
  
 +            if (janus_ch) {
-+                const JANUS_RAW_EXT *raw = ossl_janus_find_raw(&s->janus, thisexd->type);
++                const JANUS_RAW_EXT *raw = ossl_janus_hello_raw(s, thisexd->type);
 +
 +                if (raw != NULL) {
 +                    if (!janus_put_raw(s, pkt, raw))
@@ -1809,10 +2288,10 @@ index 2a87c23..4260e89 100644
              SSL3_CC_HANDSHAKE | SSL3_CHANGE_CIPHER_CLIENT_WRITE))) {
          ;
 diff --git a/util/libssl.num b/util/libssl.num
-index 9fe992b..fe2e1d6 100644
+index 9fe992b..7fdcedb 100644
 --- a/util/libssl.num
 +++ b/util/libssl.num
-@@ -626,3 +626,20 @@ SSL_CTX_ech_set1_outer_alpn_protos      625	4_0_0	EXIST::FUNCTION:ECH
+@@ -626,3 +626,22 @@ SSL_CTX_ech_set1_outer_alpn_protos      625	4_0_0	EXIST::FUNCTION:ECH
  SSL_set1_ech_config_list                626	4_0_0	EXIST::FUNCTION:ECH
  SSL_get0_sigalg                         627	4_0_0	EXIST::FUNCTION:
  SSL_get0_shared_sigalg                  628	4_0_0	EXIST::FUNCTION:
@@ -1833,3 +2312,5 @@ index 9fe992b..fe2e1d6 100644
 +SSL_janus_set_alps                      643	4_0_0	EXIST::FUNCTION:
 +SSL_janus_alps_negotiated               644	4_0_0	EXIST::FUNCTION:
 +SSL_janus_get_peer_alps                 645	4_0_0	EXIST::FUNCTION:
++SSL_CTX_janus_set_ech_grease            646	4_0_0	EXIST::FUNCTION:
++SSL_janus_set_ech_grease                647	4_0_0	EXIST::FUNCTION:

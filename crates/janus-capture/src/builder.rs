@@ -1,4 +1,4 @@
-use janus::{GREASE, HpackPolicy, HpackStyle, Http2Profile, Huffman, Indexing, PriorityMode, Profile, StreamPriority, TlsProfile};
+use janus::{EchGrease, GREASE, HpackPolicy, HpackStyle, Http2Profile, Huffman, Indexing, PriorityMode, Profile, StreamPriority, TlsProfile};
 
 use crate::clienthello::{ClientHello, is_grease};
 use crate::h2frames::{ClientConnection, HeaderField, Representation, huffman_length, pseudo_letter};
@@ -116,12 +116,24 @@ impl<'a> ProfileBuilder<'a> {
             );
         }
 
+        let ech_grease = match self.ech_grease() {
+            Ok(grease) => grease,
+            Err(reason) => {
+                self.notes
+                    .push(format!("encrypted_client_hello sent as the captured body: {reason}"));
+                None
+            }
+        };
+
         let mut raw_extensions = Vec::new();
         for (ext_type, body) in &hello.extensions {
             if is_grease(*ext_type) || *ext_type == 0x0029 {
                 continue;
             }
-            if self.native_extensions.contains(ext_type) && self.native_body_matches(*ext_type, body) {
+            if *ext_type == 0xfe0d && ech_grease.is_some() {
+                continue;
+            }
+            if *ext_type != 0xfe0d && self.native_extensions.contains(ext_type) && self.native_body_matches(*ext_type, body) {
                 continue;
             }
             raw_extensions.push((*ext_type, body.clone()));
@@ -150,9 +162,91 @@ impl<'a> ProfileBuilder<'a> {
             alps,
             cert_compression: hello.cert_compression.clone(),
             ocsp: types.contains(&0x0005),
-            ech_grease: types.contains(&0xfe0d),
+            ech_grease,
             permute_extensions: self.permuted(),
         })
+    }
+
+    /**
+     * HPKE suite and payload lengths of the GREASE encrypted_client_hello in every captured hello.
+     */
+    fn ech_grease(&mut self) -> Result<Option<EchGrease>, String> {
+        let mut grease: Option<EchGrease> = None;
+        let mut seen = 0;
+
+        for hello in self.hellos {
+            let Some((_, body)) = hello.extensions.iter().find(|(t, _)| *t == 0xfe0d) else {
+                continue;
+            };
+            let (kem, kdf, aead, payload_len) = Self::outer_ech(body)?;
+            seen += 1;
+
+            match &mut grease {
+                None => {
+                    grease = Some(EchGrease {
+                        kem,
+                        kdf,
+                        aead,
+                        payload_lengths: vec![payload_len],
+                    })
+                }
+                Some(g) => {
+                    if (g.kem, g.kdf, g.aead) != (kem, kdf, aead) {
+                        return Err(format!(
+                            "the HPKE suite changed between handshakes ({:04x}/{:04x}/{:04x} then {kem:04x}/{kdf:04x}/{aead:04x})",
+                            g.kem, g.kdf, g.aead
+                        ));
+                    }
+                    if !g.payload_lengths.contains(&payload_len) {
+                        g.payload_lengths.push(payload_len);
+                    }
+                }
+            }
+        }
+
+        let Some(mut grease) = grease else {
+            return Ok(None);
+        };
+        grease.payload_lengths.sort_unstable();
+        self.notes.push(format!(
+            "ECH GREASE kem {:04x} kdf {:04x} aead {:04x}, payload lengths {:?} seen over {seen} handshakes",
+            grease.kem, grease.kdf, grease.aead, grease.payload_lengths
+        ));
+        Ok(Some(grease))
+    }
+
+    /**
+     * (kem, kdf, aead, payload length) of an outer encrypted_client_hello body; the KEM is told by the enc length.
+     */
+    fn outer_ech(body: &[u8]) -> Result<(u16, u16, u16, u16), String> {
+        let u16_at = |at: usize| -> Result<u16, String> {
+            match body.get(at..at + 2) {
+                Some(b) => Ok(u16::from_be_bytes([b[0], b[1]])),
+                None => Err("truncated encrypted_client_hello".into()),
+            }
+        };
+
+        if body.first() != Some(&0) {
+            return Err("not an outer encrypted_client_hello".into());
+        }
+        let kdf = u16_at(1)?;
+        let aead = u16_at(3)?;
+        let enc_len = u16_at(6)? as usize;
+        let payload_len = u16_at(8 + enc_len)?;
+        if body.len() != 10 + enc_len + payload_len as usize {
+            return Err("encrypted_client_hello length does not add up".into());
+        }
+
+        // RFC 9180 Npk of the DHKEMs
+        let kem = match enc_len {
+            32 => 0x0020,
+            56 => 0x0021,
+            65 => 0x0010,
+            97 => 0x0011,
+            133 => 0x0012,
+            other => return Err(format!("no HPKE KEM has a {other} byte enc")),
+        };
+        Ok((kem, kdf, aead, payload_len))
     }
 
     /**

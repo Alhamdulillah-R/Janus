@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{Error, Result};
 use crate::http2::{HpackStyle, Http2Profile, PriorityMode, StreamPriority};
 use crate::profile::Profile;
-use crate::tls::TlsProfile;
+use crate::tls::{EchGrease, TlsProfile};
 use janus_h2::{HpackPolicy, Huffman, Indexing};
 
 /**
@@ -32,8 +32,47 @@ struct TlsDoc {
     /// (extension type, body as hex)
     raw_extensions: Vec<(u16, String)>,
     ocsp: bool,
-    ech_grease: bool,
+    #[serde(deserialize_with = "ech_grease_field")]
+    ech_grease: Option<EchGreaseDoc>,
     permute_extensions: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EchGreaseDoc {
+    kem: u16,
+    kdf: u16,
+    aead: u16,
+    payload_lengths: Vec<u16>,
+}
+
+/**
+ * ech_grease as written now (null or an object) or by profiles before the shape was configurable (a bool).
+ */
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum EchGreaseField {
+    Flag(bool),
+    Shape(EchGreaseDoc),
+}
+
+fn ech_grease_field<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<EchGreaseDoc>, D::Error> {
+    let field: Option<EchGreaseField> = Option::deserialize(deserializer)?;
+
+    Ok(match field {
+        None | Some(EchGreaseField::Flag(false)) => None,
+        // a `true` from before meant OpenSSL's own GREASE, which is what the default spells out
+        Some(EchGreaseField::Flag(true)) => Some(ech_grease_doc(&EchGrease::default())),
+        Some(EchGreaseField::Shape(doc)) => Some(doc),
+    })
+}
+
+fn ech_grease_doc(grease: &EchGrease) -> EchGreaseDoc {
+    EchGreaseDoc {
+        kem: grease.kem,
+        kdf: grease.kdf,
+        aead: grease.aead,
+        payload_lengths: grease.payload_lengths.clone(),
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -123,7 +162,7 @@ fn tls_doc(tls: &TlsProfile) -> TlsDoc {
         cert_compression: tls.cert_compression.clone(),
         raw_extensions: tls.raw_extensions.iter().map(|(t, b)| (*t, hex(b))).collect(),
         ocsp: tls.ocsp,
-        ech_grease: tls.ech_grease,
+        ech_grease: tls.ech_grease.as_ref().map(ech_grease_doc),
         permute_extensions: tls.permute_extensions,
     }
 }
@@ -150,7 +189,12 @@ fn tls_from_doc(doc: TlsDoc) -> Result<TlsProfile> {
         alps,
         cert_compression: doc.cert_compression,
         ocsp: doc.ocsp,
-        ech_grease: doc.ech_grease,
+        ech_grease: doc.ech_grease.map(|g| EchGrease {
+            kem: g.kem,
+            kdf: g.kdf,
+            aead: g.aead,
+            payload_lengths: g.payload_lengths,
+        }),
         permute_extensions: doc.permute_extensions,
     })
 }

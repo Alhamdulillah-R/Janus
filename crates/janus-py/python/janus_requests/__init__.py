@@ -37,6 +37,7 @@ from .adapters import JanusAdapter
 from .api import delete, get, head, options, patch, post, put, request
 from .profile import (
     GREASE,
+    EchGrease,
     Huffman,
     Indexing,
     JanusHpack,
@@ -58,6 +59,7 @@ __all__ = [
     "AsyncSession",
     "ConnectTimeout",
     "ConnectionError",
+    "EchGrease",
     "FileModeWarning",
     "HTTPError",
     "Huffman",

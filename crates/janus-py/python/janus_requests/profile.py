@@ -128,6 +128,42 @@ class JanusHpack:
 
 
 @dataclass
+class EchGrease:
+    """
+    GREASE encrypted_client_hello: HPKE suite and the payload lengths one is drawn from per connection.
+    """
+
+    kem: int = 0x0020
+    kdf: int = 0x0001
+    aead: int = 0x0001
+    payload_lengths: list[int] = field(default_factory=lambda: [144, 176, 208, 240])
+
+    @classmethod
+    def from_native(cls, data: dict[str, Any] | bool | None) -> EchGrease | None:
+        """
+        Read the native form; a bool comes from profiles saved before the shape was configurable.
+        """
+        if data is None or data is False:
+            return None
+        if data is True:
+            return cls()
+        return cls(
+            kem=data["kem"],
+            kdf=data["kdf"],
+            aead=data["aead"],
+            payload_lengths=list(data["payload_lengths"]),
+        )
+
+    def to_native(self) -> dict[str, Any]:
+        return {
+            "kem": int(self.kem),
+            "kdf": int(self.kdf),
+            "aead": int(self.aead),
+            "payload_lengths": [int(v) for v in self.payload_lengths],
+        }
+
+
+@dataclass
 class JanusTls:
     """
     ClientHello content as wire values; list order is wire order, GREASE marks a random GREASE value.
@@ -148,7 +184,8 @@ class JanusTls:
     # extension type -> exact body bytes
     raw_extensions: dict[int, bytes] = field(default_factory=dict)
     ocsp: bool = False
-    ech_grease: bool = False
+    # None sends no encrypted_client_hello GREASE
+    ech_grease: EchGrease | None = None
     # shuffle the extensions on every connection, as Chrome does
     permute_extensions: bool = False
 
@@ -166,7 +203,7 @@ class JanusTls:
             cert_compression=[named(CertCompressionAlgorithm, v) for v in data["cert_compression"]],
             raw_extensions={named(ExtensionType, t): bytes(body) for t, body in data["raw_extensions"]},
             ocsp=data["ocsp"],
-            ech_grease=data["ech_grease"],
+            ech_grease=EchGrease.from_native(data["ech_grease"]),
             permute_extensions=data["permute_extensions"],
         )
 
@@ -190,7 +227,7 @@ class JanusTls:
             "cert_compression": [int(v) for v in self.cert_compression],
             "raw_extensions": [(int(t), bytes(body)) for t, body in self.raw_extensions.items()],
             "ocsp": self.ocsp,
-            "ech_grease": self.ech_grease,
+            "ech_grease": self.ech_grease.to_native() if self.ech_grease is not None else None,
             "permute_extensions": self.permute_extensions,
         }
 

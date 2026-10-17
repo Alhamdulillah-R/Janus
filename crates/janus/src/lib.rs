@@ -20,6 +20,6 @@ pub use http2::{H2Connection, HpackStyle, Http2Profile, PriorityMode, StreamPrio
 pub use profile::Profile;
 pub use profile_json::{indexing_from, indexing_name};
 pub use proxy::Proxy;
-pub use tls::{ClientCert, GREASE, TlsConnector, TlsMode, TlsProfile, Verify};
+pub use tls::{ClientCert, EchGrease, GREASE, TlsConnector, TlsMode, TlsProfile, Verify};
 pub use upload::{Upload, UploadSender};
 pub use janus_h2::{HpackPolicy, Huffman, Indexing};

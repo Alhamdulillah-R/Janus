@@ -100,9 +100,21 @@ class ProfileWriter:
                 for t, body in tls.raw_extensions.items()
             ]
             fields.append(("raw_extensions", self.mapping(entries, level + 1)))
-        for flag in ("ocsp", "ech_grease", "permute_extensions"):
-            if getattr(tls, flag):
-                fields.append((flag, "True"))
+        if tls.ocsp:
+            fields.append(("ocsp", "True"))
+        if tls.ech_grease is not None:
+            self.package_names.add("EchGrease")
+            grease = tls.ech_grease
+            lengths = ", ".join(str(v) for v in grease.payload_lengths)
+            fields.append(
+                (
+                    "ech_grease",
+                    f"EchGrease(kem=0x{grease.kem:04x}, kdf=0x{grease.kdf:04x}, aead=0x{grease.aead:04x}, "
+                    f"payload_lengths=[{lengths}])",
+                )
+            )
+        if tls.permute_extensions:
+            fields.append(("permute_extensions", "True"))
         return self.call("JanusTls", fields, level)
 
     def http2(self, http2: JanusHttp2, level: int) -> str:

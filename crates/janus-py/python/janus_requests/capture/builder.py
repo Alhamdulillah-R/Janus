@@ -8,6 +8,7 @@ from collections import Counter
 
 from ..profile import (
     GREASE,
+    EchGrease,
     Huffman,
     Indexing,
     JanusHpack,
@@ -125,11 +126,23 @@ class ProfileBuilder:
                 "reload the page after a few seconds to capture one"
             )
 
+        try:
+            ech_grease = self.ech_grease()
+        except ValueError as e:
+            self.notes.append(f"encrypted_client_hello sent as the captured body: {e}")
+            ech_grease = None
+
         raw_extensions = {}
         for ext_type, body in hello.extensions:
             if is_grease(ext_type) or ext_type == 0x0029:
                 continue
-            if ext_type in self.native_extensions and self.native_bodies.get(ext_type, body) == body:
+            if ext_type == 0xFE0D and ech_grease is not None:
+                continue
+            if (
+                ext_type != 0xFE0D
+                and ext_type in self.native_extensions
+                and self.native_bodies.get(ext_type, body) == body
+            ):
                 continue
             raw_extensions[named(ExtensionType, ext_type)] = body
 
@@ -144,7 +157,7 @@ class ProfileBuilder:
             cert_compression=list(hello.cert_compression),
             raw_extensions=raw_extensions,
             ocsp=0x0005 in types,
-            ech_grease=0xFE0D in types,
+            ech_grease=ech_grease,
             permute_extensions=self.permuted(),
         )
         tls = JanusTls.from_native(tls.to_native())
@@ -155,6 +168,61 @@ class ProfileBuilder:
                 "client ALPS settings set to empty (what Chrome 155 sends); this server cannot negotiate ALPS to observe them"
             )
         return tls
+
+    def ech_grease(self) -> EchGrease | None:
+        """
+        HPKE suite and payload lengths of the GREASE encrypted_client_hello in every captured hello.
+        """
+        grease = None
+        seen = 0
+
+        for hello in self.hellos:
+            body = next((b for t, b in hello.extensions if t == 0xFE0D), None)
+            if body is None:
+                continue
+            kem, kdf, aead, payload_len = self.outer_ech(body)
+            seen += 1
+
+            if grease is None:
+                grease = EchGrease(kem=kem, kdf=kdf, aead=aead, payload_lengths=[payload_len])
+                continue
+            if (grease.kem, grease.kdf, grease.aead) != (kem, kdf, aead):
+                raise ValueError(
+                    f"the HPKE suite changed between handshakes ({grease.kem:04x}/{grease.kdf:04x}/{grease.aead:04x} "
+                    f"then {kem:04x}/{kdf:04x}/{aead:04x})"
+                )
+            if payload_len not in grease.payload_lengths:
+                grease.payload_lengths.append(payload_len)
+
+        if grease is None:
+            return None
+        grease.payload_lengths.sort()
+        self.notes.append(
+            f"ECH GREASE kem {grease.kem:04x} kdf {grease.kdf:04x} aead {grease.aead:04x}, "
+            f"payload lengths {grease.payload_lengths} seen over {seen} handshakes"
+        )
+        return grease
+
+    def outer_ech(self, body: bytes) -> tuple[int, int, int, int]:
+        """
+        (kem, kdf, aead, payload length) of an outer encrypted_client_hello body; the KEM is told by the enc length.
+        """
+        if len(body) < 10 or body[0] != 0:
+            raise ValueError("not an outer encrypted_client_hello")
+        kdf = int.from_bytes(body[1:3], "big")
+        aead = int.from_bytes(body[3:5], "big")
+        enc_len = int.from_bytes(body[6:8], "big")
+        if len(body) < 10 + enc_len:
+            raise ValueError("truncated encrypted_client_hello")
+        payload_len = int.from_bytes(body[8 + enc_len : 10 + enc_len], "big")
+        if len(body) != 10 + enc_len + payload_len:
+            raise ValueError("encrypted_client_hello length does not add up")
+
+        # RFC 9180 Npk of the DHKEMs
+        kems = {32: 0x0020, 56: 0x0021, 65: 0x0010, 97: 0x0011, 133: 0x0012}
+        if enc_len not in kems:
+            raise ValueError(f"no HPKE KEM has a {enc_len} byte enc")
+        return kems[enc_len], kdf, aead, payload_len
 
     def permuted(self) -> bool:
         """

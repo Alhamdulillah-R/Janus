@@ -1,4 +1,4 @@
-use janus::{HpackPolicy, HpackStyle, Http2Profile, Huffman, Indexing, PriorityMode, Profile, StreamPriority, TlsProfile};
+use janus::{EchGrease, HpackPolicy, HpackStyle, Http2Profile, Huffman, Indexing, PriorityMode, Profile, StreamPriority, TlsProfile};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
@@ -22,8 +22,17 @@ pub struct TlsArg {
     cert_compression: Vec<u16>,
     raw_extensions: Vec<(u16, Vec<u8>)>,
     ocsp: bool,
-    ech_grease: bool,
+    ech_grease: Option<EchGreaseArg>,
     permute_extensions: bool,
+}
+
+#[derive(FromPyObject)]
+#[pyo3(from_item_all)]
+pub struct EchGreaseArg {
+    kem: u16,
+    kdf: u16,
+    aead: u16,
+    payload_lengths: Vec<u16>,
 }
 
 #[derive(FromPyObject)]
@@ -87,7 +96,12 @@ impl TlsArg {
             alps: self.alps,
             cert_compression: self.cert_compression,
             ocsp: self.ocsp,
-            ech_grease: self.ech_grease,
+            ech_grease: self.ech_grease.map(|g| EchGrease {
+                kem: g.kem,
+                kdf: g.kdf,
+                aead: g.aead,
+                payload_lengths: g.payload_lengths,
+            }),
             permute_extensions: self.permute_extensions,
         }
     }
@@ -196,7 +210,17 @@ pub fn tls_dict<'py>(py: Python<'py>, tls: &TlsProfile) -> PyResult<Bound<'py, P
     dict.set_item("cert_compression", tls.cert_compression.clone())?;
     dict.set_item("raw_extensions", raw_extensions)?;
     dict.set_item("ocsp", tls.ocsp)?;
-    dict.set_item("ech_grease", tls.ech_grease)?;
+    match &tls.ech_grease {
+        Some(grease) => {
+            let shape = PyDict::new(py);
+            shape.set_item("kem", grease.kem)?;
+            shape.set_item("kdf", grease.kdf)?;
+            shape.set_item("aead", grease.aead)?;
+            shape.set_item("payload_lengths", grease.payload_lengths.clone())?;
+            dict.set_item("ech_grease", shape)?;
+        }
+        None => dict.set_item("ech_grease", py.None())?,
+    }
     dict.set_item("permute_extensions", tls.permute_extensions)?;
     Ok(dict)
 }

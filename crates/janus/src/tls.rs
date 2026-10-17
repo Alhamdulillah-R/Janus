@@ -46,6 +46,14 @@ mod ffi {
             settings_len: usize,
         ) -> c_int;
         pub fn SSL_janus_alps_negotiated(s: *const SSL) -> c_int;
+        pub fn SSL_CTX_janus_set_ech_grease(
+            ctx: *mut SSL_CTX,
+            kem: u16,
+            kdf: u16,
+            aead: u16,
+            payload_lengths: *const u16,
+            n: usize,
+        ) -> c_int;
         pub fn SSL_CTX_set1_cert_comp_preference(ctx: *mut SSL_CTX, algs: *mut c_int, len: usize) -> c_int;
     }
 }
@@ -67,8 +75,85 @@ pub struct TlsProfile {
     pub alps: Vec<(String, Vec<u8>)>,
     pub cert_compression: Vec<u16>,
     pub ocsp: bool,
-    pub ech_grease: bool,
+    pub ech_grease: Option<EchGrease>,
     pub permute_extensions: bool,
+}
+
+/**
+ * GREASE encrypted_client_hello: HPKE suite and the payload lengths one is drawn from per connection.
+ */
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EchGrease {
+    pub kem: u16,
+    pub kdf: u16,
+    pub aead: u16,
+    pub payload_lengths: Vec<u16>,
+}
+
+impl Default for EchGrease {
+    /**
+     * What OpenSSL sends on its own: X25519, HKDF-SHA256, AES-128-GCM, 144/176/208/240.
+     */
+    fn default() -> EchGrease {
+        EchGrease {
+            kem: 0x0020,
+            kdf: 0x0001,
+            aead: 0x0001,
+            payload_lengths: vec![144, 176, 208, 240],
+        }
+    }
+}
+
+impl EchGrease {
+    /**
+     * Parse the spec arguments `kem=0020 kdf=0001 aead=0001 lengths=144,176,208,240`; none means the default.
+     */
+    fn from_spec(args: &[&str]) -> std::result::Result<EchGrease, String> {
+        if args.is_empty() {
+            return Ok(EchGrease::default());
+        }
+
+        let mut kem = None;
+        let mut kdf = None;
+        let mut aead = None;
+        let mut lengths = None;
+        for arg in args {
+            let Some((key, value)) = arg.split_once('=') else {
+                return Err(format!("ech_grease argument {arg} is not key=value"));
+            };
+            match key {
+                "kem" => kem = Some(parse_u16(value)?),
+                "kdf" => kdf = Some(parse_u16(value)?),
+                "aead" => aead = Some(parse_u16(value)?),
+                "lengths" => {
+                    let parsed: std::result::Result<Vec<u16>, _> = value.split(',').map(|v| v.parse::<u16>()).collect();
+                    lengths = Some(parsed.map_err(|_| format!("bad ech_grease lengths {value}"))?);
+                }
+                _ => return Err(format!("unknown ech_grease key {key}")),
+            }
+        }
+
+        match (kem, kdf, aead, lengths) {
+            (Some(kem), Some(kdf), Some(aead), Some(payload_lengths)) => Ok(EchGrease {
+                kem,
+                kdf,
+                aead,
+                payload_lengths,
+            }),
+            _ => Err("ech_grease needs kem, kdf, aead and lengths together".into()),
+        }
+    }
+
+    fn to_spec(&self) -> String {
+        let lengths: Vec<String> = self.payload_lengths.iter().map(|l| l.to_string()).collect();
+        format!(
+            "ech_grease kem={:04x} kdf={:04x} aead={:04x} lengths={}",
+            self.kem,
+            self.kdf,
+            self.aead,
+            lengths.join(",")
+        )
+    }
 }
 
 impl TlsProfile {
@@ -130,7 +215,7 @@ impl TlsProfile {
                     profile.raw_extensions.push((ext_type, body));
                 }
                 "ocsp" => profile.ocsp = true,
-                "ech_grease" => profile.ech_grease = true,
+                "ech_grease" => profile.ech_grease = Some(EchGrease::from_spec(&rest).map_err(|e| bad(&e))?),
                 "flag" => match rest.first() {
                     Some(&"permute") => profile.permute_extensions = true,
                     _ => return Err(bad("unknown flag")),
@@ -172,8 +257,8 @@ impl TlsProfile {
         for (ext_type, body) in &self.raw_extensions {
             out.push(format!("raw {ext_type:04x} {}", encode_hex(body)).trim_end().to_string());
         }
-        if self.ech_grease {
-            out.push("ech_grease".to_string());
+        if let Some(grease) = &self.ech_grease {
+            out.push(grease.to_spec());
         }
         if self.ocsp {
             out.push("ocsp".to_string());
@@ -218,7 +303,7 @@ impl TlsProfile {
             }
         });
 
-        if self.ech_grease {
+        if self.ech_grease.is_some() {
             // SSL_OP_ECH_GREASE
             builder.set_options(SslOptions::from_bits_retain(1 << 37));
         }
@@ -253,6 +338,16 @@ impl TlsProfile {
                     proto.len(),
                     settings.as_ptr(),
                     settings.len(),
+                ))?;
+            }
+            if let Some(grease) = &self.ech_grease {
+                check(ffi::SSL_CTX_janus_set_ech_grease(
+                    ctx,
+                    grease.kem,
+                    grease.kdf,
+                    grease.aead,
+                    grease.payload_lengths.as_ptr(),
+                    grease.payload_lengths.len(),
                 ))?;
             }
             if !self.cert_compression.is_empty() {
