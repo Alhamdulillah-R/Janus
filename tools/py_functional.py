@@ -596,10 +596,14 @@ def sct(port: str) -> None:
 
 def proxies(base: str, http_port: str, socks_port: str) -> None:
     with requests.Session() as s:
-        r = s.get(f"{h2probe}/api/get", proxies={"https": f"http://127.0.0.1:{http_port}"}, timeout=30)
-        check("https via http CONNECT proxy", r.status_code == 200 and r.raw.version_string == "HTTP/2", r.text)
-        r = s.get(f"{h2probe}/api/get", proxies={"https": f"socks5h://127.0.0.1:{socks_port}"}, timeout=30)
-        check("https via socks5h", r.status_code == 200, r.text)
+        # TrackMe on 443: TLS to h2probe's port 80 gets cut by some networks on the way
+        r = s.get(trackme, proxies={"https": f"http://127.0.0.1:{http_port}"}, timeout=30)
+        check("https via http CONNECT proxy", r.status_code == 200 and r.raw.version_string == "HTTP/2", r.status_code)
+        # a full handshake: the CONNECT request above left a session ticket for this host
+        s.clear_tls_sessions()
+        r = s.get(trackme, proxies={"https": f"socks5h://127.0.0.1:{socks_port}"}, timeout=30)
+        ja4 = r.json()["tls"]["ja4"]
+        check("https via socks5h", r.status_code == 200 and ja4 == chrome_ja4, ja4)
         r = s.get(f"{base}/echo", proxies={"http": f"http://127.0.0.1:{http_port}"}, timeout=30)
         check("http via proxy absolute-form", r.status_code == 200, r.status_code)
         expect_raise(
