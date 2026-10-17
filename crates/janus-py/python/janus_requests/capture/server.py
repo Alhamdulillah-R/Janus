@@ -1,5 +1,5 @@
 """
-Local HTTPS server that records a browser's ClientHellos, page request and XHR request, and serves the JanusProfiles they imply.
+Local HTTPS server that records a browser's ClientHellos and page request, and serves the JanusProfile they imply.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import ssl
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .builder import ProfileBuilder
@@ -23,6 +24,19 @@ from .h2frames import ClientConnection, ClientStream, HeadersBlock
 from .module import CaptureModule, is_module_name
 
 log = logging.getLogger("janus_requests.capture")
+
+
+@dataclass
+class PageRequest:
+    """
+    The page request of one browser configuration and the connection it came on.
+    """
+
+    headers: list[tuple[str, str]]
+    connection: ClientConnection | None
+    protocol: str
+    # the handler serving that connection; later requests on it refresh `connection`
+    owner: object
 
 
 class CaptureServer(socketserver.ThreadingTCPServer):
@@ -41,6 +55,7 @@ class CaptureServer(socketserver.ThreadingTCPServer):
         name: str = "captured",
         cert: str | Path | None = None,
         key: str | Path | None = None,
+        rounds: int = 4,
     ):
         if not is_module_name(name):
             raise ValueError(f"capture name {name!r} must be a Python identifier, e.g. my_chrome")
@@ -50,10 +65,14 @@ class CaptureServer(socketserver.ThreadingTCPServer):
         self.lock = threading.Lock()
         # ClientHellos grouped by browser configuration (order-independent), oldest first
         self.hellos: dict[tuple, list[ClientHello]] = {}
-        # headers of the last page request per browser configuration
-        self.documents: dict[tuple, list[tuple[str, str]]] = {}
+        # last page request per browser configuration
+        self.documents: dict[tuple, PageRequest] = {}
+        # fetch() rounds the page sends after loading, each on a new connection
+        self.rounds = rounds
         self.peek_timeout_s = 10
         self.idle_timeout_s = 5
+        # how long a closing connection waits for the client to hang up
+        self.drain_timeout_s = 2
         self.max_data_frame = 16384
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -114,9 +133,9 @@ class CaptureServer(socketserver.ThreadingTCPServer):
         )
         return cert_path, key_path
 
-    def remember(self, hello: ClientHello) -> tuple[tuple, list[ClientHello]]:
+    def remember(self, hello: ClientHello) -> tuple:
         """
-        Store a ClientHello; returns its browser-configuration key and every hello under that key.
+        Store a ClientHello; returns its browser-configuration key.
         """
         ignored = {0x0015, 0x0029}
         group = (
@@ -126,70 +145,66 @@ class CaptureServer(socketserver.ThreadingTCPServer):
         with self.lock:
             hellos = self.hellos.setdefault(group, [])
             hellos.append(hello)
-            return group, list(hellos)
+        return group
 
-    def page(self) -> bytes:
+    def page(self, report: bytes) -> bytes:
         """
-        Capture page: its inline synchronous XHR PUT is the fetch-style request, and its response is the report.
+        Capture page: the report of the page request, then fetch() rounds that each land on a new connection.
         """
-        return b"""<!doctype html>
+        script = f"""<script>
+var rounds = {self.rounds + 1};
+function next(round) {{
+  if (round > rounds) return;
+  setTimeout(function () {{
+    fetch("/janus-capture/round?n=" + round + "&t=" + Date.now())
+      .then(function (r) {{ return r.text(); }})
+      .then(function (t) {{
+        document.getElementById("out").innerHTML = t;
+        document.getElementById("round").textContent = "round " + round + " / " + rounds + (round < rounds ? ", next in a moment" : ", done");
+        next(round + 1);
+      }});
+  }}, 1500);
+}}
+next(1);
+</script>"""
+        head = b"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Janus capture</title>
-<style>body{font-family:system-ui,sans-serif;margin:2em}pre{background:#f4f4f4;padding:1em;overflow:auto}</style>
-</head><body><p>capturing (needs JavaScript)</p>
-<p>a client that runs no JavaScript: open /janus-capture/now on this host, that single request becomes both profiles</p>
-<script>
-var xhr = new XMLHttpRequest();
-xhr.open("PUT", "/janus-capture/fetch?t=" + Date.now(), false);
-xhr.setRequestHeader("Content-Type", "text/plain");
-xhr.send("janus");
-document.body.innerHTML = xhr.responseText;
-</script>
-</body></html>
-"""
+<style>body{font-family:system-ui,sans-serif;margin:2em;line-height:1.5}pre{background:#f4f4f4;padding:1em;overflow:auto}</style>
+</head><body><div id="out">"""
+        tail = b"""</div><p id="round">more handshakes need JavaScript; without it this capture is final</p>\n"""
+        return head + report + tail + script.encode() + b"\n</body></html>\n"
 
-    def publish(
-        self,
-        group: tuple,
-        hellos: list[ClientHello],
-        fetch: list[tuple[str, str]],
-        connection: ClientConnection | None,
-        protocol: str,
-        single: bool = False,
-    ) -> bytes:
+    def publish(self, group: tuple) -> bytes:
         """
-        Write `<name>.py` (importable) and the two profile JSON files; returns the report as an HTML fragment.
-
-        `single` publishes from this one request alone, for clients that run no JavaScript.
+        Write `<name>.py` (importable) and `<name>.json` from the page request and every handshake so far; returns the report.
         """
-        if single:
-            document = fetch
-        else:
-            with self.lock:
-                document = self.documents.get(group)
+        with self.lock:
+            document = self.documents.get(group)
+            hellos = list(self.hellos.get(group, []))
         if document is None:
+            log.info("round request before any page request from the same TLS configuration; open / first")
             return b"<p>open / first: the page request was not captured for this browser</p>"
+        headers, connection, protocol = document.headers, document.connection, document.protocol
 
         builder = ProfileBuilder(hellos, self.name)
-        builder.single_request = single
-        (navigation, headers), (fetch_profile, fetch_headers) = builder.build(document, fetch, connection)
-        user_agent = next((v for n, v in document if n.lower() == "user-agent"), "(none)")
+        profile, template = builder.build(headers, connection)
+        user_agent = next((v for n, v in headers if n.lower() == "user-agent"), "(none)")
         summary = [
             f"captured  {time.strftime('%Y-%m-%d %H:%M:%S')} over {protocol}, {len(hellos)} TLS handshake(s)",
             f"browser   {user_agent}",
             f"JA4       {hellos[-1].ja4()}",
-            f"Akamai    {navigation.http2.akamai()}",
+            f"Akamai    {profile.http2.akamai()}",
         ]
-        code = CaptureModule(self.name, navigation, headers, fetch_profile, fetch_headers).render(
-            summary, builder.notes
-        )
+        code = CaptureModule(self.name, profile, template).render(summary, builder.notes)
 
         module = self.out_dir / f"{self.name}.py"
         # one module per name: the latest capture replaces it
         with self.lock:
             module.write_text(code, encoding="utf-8")
-            navigation.save(self.out_dir / f"{navigation.name}.json")
-            fetch_profile.save(self.out_dir / f"{fetch_profile.name}.json")
-        log.info("captured %s over %s: %s (import %s)", self.name, protocol, module, self.name)
+            profile.save(self.out_dir / f"{profile.name}.json")
+        log.info(
+            "captured %s over %s, %d handshake(s): %s (import %s)", self.name, protocol, len(hellos), module, self.name
+        )
         for note in builder.notes:
             log.info("  note: %s", note)
 
@@ -206,28 +221,26 @@ document.body.innerHTML = xhr.responseText;
     def respond(
         self,
         group: tuple,
-        hellos: list[ClientHello],
         path: str,
         headers: list[tuple[str, str]],
         connection: ClientConnection | None,
         protocol: str,
+        owner: object,
     ) -> tuple[int, bytes]:
         """
-        Status and body for one request.
+        Status and body for one request; `owner` identifies the connection it came on.
         """
         if path == "/":
             with self.lock:
-                self.documents[group] = headers
-            log.info(
-                "page served over %s: waiting for the page script to PUT /janus-capture/fetch, "
-                "a client without JavaScript opens /janus-capture/now instead",
-                protocol,
-            )
-            return 200, self.page()
-        if path.startswith("/janus-capture/fetch"):
-            return 200, self.publish(group, hellos, headers, connection, protocol)
-        if path.startswith("/janus-capture/now"):
-            return 200, self.publish(group, hellos, headers, connection, protocol, single=True)
+                self.documents[group] = PageRequest(headers, connection, protocol, owner)
+            return 200, self.page(self.publish(group))
+        if path.startswith("/janus-capture/round"):
+            # the first round reuses the page connection: its header blocks show how literals are encoded
+            with self.lock:
+                document = self.documents.get(group)
+                if document is not None and document.owner is owner:
+                    document.connection = connection
+            return 200, self.publish(group)
         return 404, b""
 
 
@@ -248,7 +261,7 @@ class CaptureHandler(socketserver.BaseRequestHandler):
             return
         if hello is None:
             return
-        group, hellos = self.server.remember(hello)
+        group = self.server.remember(hello)
 
         try:
             tls = self.server.context.wrap_socket(sock, server_side=True)
@@ -259,9 +272,9 @@ class CaptureHandler(socketserver.BaseRequestHandler):
 
         try:
             if tls.selected_alpn_protocol() == "h2":
-                self.serve_h2(tls, group, hellos)
+                self.serve_h2(tls, group)
             else:
-                self.serve_h1(tls, group, hellos)
+                self.serve_h1(tls, group)
         except (ssl.SSLError, OSError) as e:
             log.info("connection from %s closed: %s", self.client_address, e)
         except ValueError as e:
@@ -293,7 +306,7 @@ class CaptureHandler(socketserver.BaseRequestHandler):
             seen = len(data)
         raise ValueError("incomplete ClientHello")
 
-    def serve_h2(self, tls: ssl.SSLSocket, group: tuple, hellos: list[ClientHello]) -> None:
+    def serve_h2(self, tls: ssl.SSLSocket, group: tuple) -> None:
         stream = ClientStream()
         seen = 0
         # request blocks whose body has not ended yet, by stream id
@@ -302,8 +315,9 @@ class CaptureHandler(socketserver.BaseRequestHandler):
         tls.sendall(self.frame(4, 0, 0, b""))
         tls.settimeout(self.server.idle_timeout_s)
         settings_acked = False
+        closing = False
 
-        while True:
+        while not closing:
             try:
                 data = tls.recv(65536)
             except TimeoutError:
@@ -331,13 +345,29 @@ class CaptureHandler(socketserver.BaseRequestHandler):
             for block in ready:
                 path = next((f.value for f in block.fields if f.name == ":path"), "/")
                 headers = [(f.name, f.value) for f in block.fields if not f.name.startswith(":")]
-                status, body = self.server.respond(group, hellos, path, headers, connection, "h2")
+                status, body = self.server.respond(group, path, headers, connection, "h2", self)
                 self.respond_h2(tls, block.stream_id, status, body)
+                # every round after the page starts a new TLS connection
+                if path.startswith("/janus-capture/"):
+                    closing = True
 
         # GOAWAY, last stream id, NO_ERROR
         snapshot = stream.connection()
         last = snapshot.headers[-1].stream_id if snapshot.headers else 0
         tls.sendall(self.frame(7, 0, 0, last.to_bytes(4, "big") + bytes(4)))
+        if closing:
+            self.drain(tls)
+
+    def drain(self, tls: ssl.SSLSocket) -> None:
+        """
+        Read until the client closes: closing with unread data sends a TCP RST that can wipe the response and tickets.
+        """
+        tls.settimeout(self.server.drain_timeout_s)
+        try:
+            while tls.recv(65536):
+                pass
+        except (TimeoutError, ssl.SSLError, OSError):
+            return
 
     def respond_h2(self, tls: ssl.SSLSocket, stream_id: int, status: int, body: bytes | None) -> None:
         body = body or b""
@@ -356,7 +386,7 @@ class CaptureHandler(socketserver.BaseRequestHandler):
             last = start + self.server.max_data_frame >= len(body)
             tls.sendall(self.frame(0, 0x1 if last else 0, stream_id, piece))
 
-    def serve_h1(self, tls: ssl.SSLSocket, group: tuple, hellos: list[ClientHello]) -> None:
+    def serve_h1(self, tls: ssl.SSLSocket, group: tuple) -> None:
         tls.settimeout(self.server.idle_timeout_s)
         buffer = b""
 
@@ -381,7 +411,7 @@ class CaptureHandler(socketserver.BaseRequestHandler):
                 return
             rest += data
 
-        status, body = self.server.respond(group, hellos, target, headers, None, "http/1.1")
+        status, body = self.server.respond(group, target, headers, None, "http/1.1", self)
         reason = "OK" if status == 200 else "Not Found"
         tls.sendall(
             f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n".encode()

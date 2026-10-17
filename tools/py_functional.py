@@ -304,44 +304,36 @@ def capture() -> None:
     server = CaptureServer(port=8767, out_dir=out_dir, name="loopback")
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    # what the capture page's script does: the page request, then a PUT XHR on the same connection
-    fetch_headers = {
-        "sec-ch-ua-platform": None,
-        "Upgrade-Insecure-Requests": None,
-        "Sec-Fetch-User": None,
-        "Content-Type": "text/plain",
-        "Accept": "*/*",
-        "Origin": "https://localhost:8767",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Dest": "empty",
-        "Referer": "https://localhost:8767/",
-        "Priority": "u=1, i",
-    }
+    # what a browser does: the page request (published at once), then fetch() rounds on new connections
     with JanusSession(headers=chrome_headers) as s:
-        for _ in range(3):
-            page = s.get("https://localhost:8767/", verify=False)
-            report = s.put(
-                "https://localhost:8767/janus-capture/fetch?t=1", data=b"janus", headers=fetch_headers, verify=False
-            )
+        page = s.get("https://localhost:8767/", verify=False)
+        first = (out_dir / "loopback.py").read_text(encoding="utf-8")
+        # round 1 rides the page connection, as a browser's first fetch() does
+        s.get("https://localhost:8767/janus-capture/round?n=1", verify=False)
+        for n in (2, 3):
             s.close()
             s.clear_tls_sessions()
-        s.get("https://localhost:8767/", verify=False)
+            s.get(f"https://localhost:8767/janus-capture/round?n={n}", verify=False)
         s.close()
-        resumed = s.get("https://localhost:8767/", verify=False)
-        report = s.put(
-            "https://localhost:8767/janus-capture/fetch?t=2", data=b"janus", headers=fetch_headers, verify=False
-        )
+        report = s.get("https://localhost:8767/janus-capture/round?n=4", verify=False)
     server.shutdown()
     server.server_close()
 
-    check("capture page served over h2", page.status_code == 200 and "XMLHttpRequest" in page.text, page.status_code)
-    check("capture report", report.status_code == 200 and "JanusProfile(" in report.text, report.status_code)
-    check("capture resumed handshake", resumed.raw.tls_session_reused, resumed.raw.tls_session_reused)
+    check(
+        "capture page carries the report at once",
+        page.status_code == 200 and "JanusProfile(" in page.text and "/janus-capture/round" in page.text,
+        page.status_code,
+    )
+    check(
+        "capture without JavaScript: one handshake",
+        "1 TLS handshake(s)" in first and "only one handshake captured" in first,
+        first[:200],
+    )
+    check("capture round report", report.status_code == 200 and "4 TLS handshake(s)" in report.text, report.status_code)
+    check("capture resumed handshake", report.raw.tls_session_reused, report.raw.tls_session_reused)
 
     check("capture report shows the import", "import loopback" in report.text, report.status_code)
     captured = JanusProfile.load(out_dir / "loopback.json")
-    captured_fetch = JanusProfile.load(out_dir / "loopback_fetch.json")
     tls = captured.tls
     expected = chrome.tls
     check(
@@ -373,8 +365,7 @@ def capture() -> None:
         and captured.http2.priority_mode == PriorityMode.chrome
         and captured.http2.headers_priority == chrome.http2.headers_priority
         and hpack.huffman == chrome.http2.hpack.huffman
-        and hpack.rules.get(":path") == chrome.http2.hpack.rules[":path"]
-        and hpack.rules.get(":method") == chrome.http2.hpack.rules[":method"],
+        and hpack.rules.get(":path") == chrome.http2.hpack.rules[":path"],
         (captured.http2.akamai(), captured.http2.priority_mode, hpack.rules),
     )
     spec = importlib.util.spec_from_file_location("loopback", out_dir / "loopback.py")
@@ -386,16 +377,10 @@ def capture() -> None:
         and {n.lower(): v for n, v in loopback.headers.items()} == {n.lower(): v for n, v in chrome_headers.items()},
         list(loopback.headers)[:3],
     )
-    fetch_values = {n.lower(): v for n, v in loopback.fetch_headers.items()}
     check(
-        "generated module: fetch headers",
-        loopback.fetch_header_order == captured_fetch.header_order
-        and loopback.fetch_header_order[:3] == ["host", "connection", "content-length"]
-        and fetch_values.get("sec-fetch-mode") == "cors"
-        and fetch_values.get("upgrade-insecure-requests", "missing") is None
-        and fetch_values.get("sec-ch-ua-platform", "missing") is None
-        and not {"content-type", "origin", "referer"} & set(fetch_values),
-        fetch_values,
+        "generated module has one profile",
+        not (out_dir / "loopback_fetch.json").exists() and not hasattr(loopback, "fetch_session"),
+        sorted(p.name for p in out_dir.iterdir()),
     )
 
     with loopback.session() as s:
@@ -407,51 +392,14 @@ def capture() -> None:
             and "user-agent" in sent_names(data),
             data["tls"]["ja4"],
         )
-        names = sent_names(
-            s.get(trackme, headers=loopback.fetch_headers, header_order=loopback.fetch_header_order).json()
-        )
+        names = sent_names(s.get(trackme, headers={"Upgrade-Insecure-Requests": None, "Sec-Fetch-Mode": "cors"}).json())
         check(
-            "generated fetch headers on a page session",
-            "upgrade-insecure-requests" not in names
-            and "sec-ch-ua-platform" not in names
-            and listed_in_order(names, loopback.fetch_header_order),
+            "page session with per-request header overrides",
+            "upgrade-insecure-requests" not in names and "sec-fetch-mode" in names,
             names,
-        )
-    with loopback.fetch_session() as s:
-        names = sent_names(s.get(trackme).json())
-        check(
-            "generated fetch_session()", "upgrade-insecure-requests" not in names and "sec-fetch-mode" in names, names
         )
 
     expect_raise("capture name must be importable", ValueError, lambda: CaptureServer(port=8768, name="my-chrome"))
-
-    # a client that runs no JavaScript: one request to /janus-capture/now yields both profiles
-    nojs_dir = Path(tempfile.mkdtemp(prefix="janus-capture-nojs-"))
-    nojs = CaptureServer(port=8771, out_dir=nojs_dir, name="nojs")
-    threading.Thread(target=nojs.serve_forever, daemon=True).start()
-    with JanusSession(headers={"User-Agent": "nojs-now"}) as s:
-        r = s.get("https://localhost:8771/janus-capture/now")
-    nojs.shutdown()
-    nojs.server_close()
-
-    module = (nojs_dir / "nojs.py").read_text(encoding="utf-8") if (nojs_dir / "nojs.py").exists() else ""
-    generated: dict = {}
-    if module:
-        exec(module, generated)  # noqa: S102 - generated code under test
-    check(
-        "capture /janus-capture/now without JavaScript",
-        r.status_code == 200
-        and "captured from a single request" in module
-        and {n.lower(): v for n, v in generated["headers"].items()} == {"user-agent": "nojs-now"}
-        and generated["profile"].tls.ciphers == captured.tls.ciphers
-        and generated["profile"].tls.signature_algorithms == captured.tls.signature_algorithms,
-        list(generated.get("headers", {})),
-    )
-
-
-def listed_in_order(names: list[str], order: list[str]) -> bool:
-    listed = [n for n in names if n in order]
-    return listed == sorted(listed, key=order.index)
 
 
 def sent_names(data: dict) -> list[str]:
@@ -510,7 +458,7 @@ def session_options(base: str, http_port: str | None, h2_echo: str | None) -> No
         check("session proxy=", JanusSession(proxy=proxy).get(f"{base}/echo").status_code == 200)
         check("session proxies=", JanusSession(proxies={"http": proxy}).get(f"{base}/echo").status_code == 200)
         check("request proxy=", JanusSession().get(f"{base}/echo", proxy=proxy).status_code == 200)
-        r = requests.get(f"{base}/echo", proxy=proxy, janus="chrome155_fetch")
+        r = requests.get(f"{base}/echo", proxy=proxy, janus="chrome155")
         check("module-level proxy= and janus=", r.status_code == 200, r.status_code)
         # a dead proxy fails every form: the proxy is really on the path
         expect_raise(

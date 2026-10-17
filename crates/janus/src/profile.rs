@@ -21,7 +21,6 @@ impl Profile {
     pub fn named(name: &str) -> Result<Profile> {
         match name {
             "chrome155" | "chrome" => Ok(Profile::chrome155()),
-            "chrome155_fetch" | "chrome_fetch" => Ok(Profile::chrome155_fetch()),
             _ => Err(Error::Profile(format!("unknown profile {name}"))),
         }
     }
@@ -57,36 +56,6 @@ impl Profile {
                 "cookie",
                 "priority",
             ]),
-        }
-    }
-
-    /**
-     * Chrome 155 on Windows, header order of fetch()/XHR (taken from a captured POST).
-     */
-    pub fn chrome155_fetch() -> Profile {
-        Profile {
-            name: "chrome155_fetch".into(),
-            header_order: names(&[
-                "host",
-                "connection",
-                "content-length",
-                "sec-ch-ua-platform",
-                "user-agent",
-                "sec-ch-ua",
-                "content-type",
-                "sec-ch-ua-mobile",
-                "accept",
-                "origin",
-                "sec-fetch-site",
-                "sec-fetch-mode",
-                "sec-fetch-dest",
-                "referer",
-                "accept-encoding",
-                "accept-language",
-                "cookie",
-                "priority",
-            ]),
-            ..Profile::chrome155()
         }
     }
 }

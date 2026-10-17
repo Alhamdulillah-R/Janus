@@ -1,5 +1,5 @@
 """
-python -m janus_requests.capture [--host 127.0.0.1] [--port 8443] [--out captured] [--name NAME] [--cert PEM --key PEM]
+python -m janus_requests.capture [--host 127.0.0.1] [--port 8443] [--out captured] [--name NAME] [--rounds N] [--cert PEM --key PEM]
 """
 
 import argparse
@@ -14,8 +14,9 @@ def main() -> None:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8443)
-    parser.add_argument("--out", default="captured", help="directory for NAME.py and the profile JSON files")
+    parser.add_argument("--out", default="captured", help="directory for NAME.py and NAME.json")
     parser.add_argument("--name", default="captured", help="module and profile name, a Python identifier")
+    parser.add_argument("--rounds", type=int, default=4, help="new connections the page opens after loading")
     parser.add_argument("--cert", help="PEM certificate (default: a fresh self-signed one)")
     parser.add_argument("--key", help="PEM private key for --cert")
     args = parser.parse_args()
@@ -28,6 +29,7 @@ def main() -> None:
         name=args.name,
         cert=args.cert,
         key=args.key,
+        rounds=args.rounds,
     )
 
     # by IP address browsers send no server_name, so point them at a host name

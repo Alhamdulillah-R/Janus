@@ -323,7 +323,7 @@ class JanusProfile:
     @classmethod
     def builtin(cls, name: str) -> JanusProfile:
         """
-        A built-in profile ("chrome155", "chrome155_fetch").
+        A built-in profile ("chrome155").
         """
         return cls.from_native(_native.builtin_profile(name))
 

@@ -4,7 +4,6 @@ Build a JanusProfile from captured ClientHellos and the first request of a conne
 
 from __future__ import annotations
 
-import copy
 from collections import Counter
 
 from ..profile import (
@@ -34,8 +33,6 @@ class ProfileBuilder:
         self.hellos = hellos
         self.name = name
         self.notes: list[str] = []
-        # one request from a client without JavaScript stands for both the page and the fetch
-        self.single_request = False
 
         # extensions the Janus kernel builds itself from the profile lists and flags
         self.native_extensions = {
@@ -71,11 +68,10 @@ class ProfileBuilder:
     def build(
         self,
         document: list[tuple[str, str]],
-        fetch: list[tuple[str, str]],
         connection: ClientConnection | None,
-    ) -> list[tuple[JanusProfile, list[tuple[str, str]]]]:
+    ) -> tuple[JanusProfile, list[tuple[str, str]]]:
         """
-        Navigation and `_fetch` profiles, each with the headers that request carried (Janus sends no default headers).
+        The profile and the headers the page request carried (Janus sends no default headers).
         """
         tls = self.tls()
 
@@ -85,26 +81,14 @@ class ProfileBuilder:
             http2 = JanusProfile.builtin("chrome155").http2
             self.notes.append("no HTTP/2 connection was captured: http2 settings are copied from the chrome155 profile")
 
-        headers, order = self.template(document, "navigation")
-        navigation = JanusProfile(
+        headers, order = self.template(document)
+        profile = JanusProfile(
             name=self.name,
             tls=tls,
             http2=http2,
             header_order=order,
         )
-
-        fetch_headers, order = self.template(fetch, "fetch")
-        fetch_profile = JanusProfile(
-            name=f"{self.name}_fetch",
-            tls=copy.deepcopy(tls),
-            http2=copy.deepcopy(http2),
-            header_order=order,
-        )
-        if self.single_request:
-            self.notes.append(
-                "captured from a single request (/janus-capture/now): fetch headers equal the page request, no JS client"
-            )
-        return [(navigation, headers), (fetch_profile, fetch_headers)]
+        return profile, headers
 
     def base_hello(self) -> ClientHello:
         """
@@ -294,7 +278,7 @@ class ProfileBuilder:
         bits = sum(huffman_codes[b][1] for b in text.encode("latin-1"))
         return (bits + 7) // 8
 
-    def template(self, headers: list[tuple[str, str]], kind: str) -> tuple[list[tuple[str, str]], list[str]]:
+    def template(self, headers: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], list[str]]:
         """
         Headers worth sending on every such request (per-request ones dropped) and the wire order of one request.
         """
@@ -313,18 +297,14 @@ class ProfileBuilder:
         values = {n.lower(): v for n, v in headers}
 
         if "HeadlessChrome" in values.get("user-agent", ""):
-            self.notes.append(f"{kind}: captured from headless Chrome, the user-agent says HeadlessChrome")
-        if kind == "fetch" and not self.single_request and values.get("priority", "").startswith("u=0"):
-            self.notes.append(
-                "fetch: the capture XHR is synchronous, which Chrome sends at u=0; fetch() and async XHR use u=1"
-            )
+            self.notes.append("captured from headless Chrome, the user-agent says HeadlessChrome")
 
         if "host" not in order:
             order[:0] = ["host", "connection"]
-            self.notes.append(f"{kind}: HTTP/2 carries no Host/Connection; they lead header_order for HTTP/1.1")
+            self.notes.append("HTTP/2 carries no Host/Connection; they lead header_order for HTTP/1.1")
         if "content-length" not in order:
             order.insert(order.index("connection") + 1 if "connection" in order else 0, "content-length")
-            self.notes.append(f"{kind}: no request body, content-length placed after connection")
+            self.notes.append("no request body, content-length placed after connection")
         if "cookie" not in order:
-            self.notes.append(f"{kind}: no cookies were sent, cookie goes after the listed headers")
+            self.notes.append("no cookies were sent, cookie goes after the listed headers")
         return template, order

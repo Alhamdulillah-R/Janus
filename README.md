@@ -19,7 +19,7 @@ with JanusSession(janus="chrome155", headers={"User-Agent": "..."}, proxy="http:
 
 - 不带任何默认请求头，发出去的头只有你给的（外加 Host / Content-Length / Cookie）
 - `verify` 默认关，不读环境变量和系统代理
-- `janus=` 接受内置名（`chrome155`、`chrome155_fetch`）或 `JanusProfile`
+- `janus=` 接受内置名 `chrome155` 或 `JanusProfile`
 - `logs=func(req, resp)` 每个响应回调一次，`retry_num=` 只重试连接类错误
 - `import janus_requests as requests` 可当 requests 用
 
@@ -29,6 +29,8 @@ with JanusSession(janus="chrome155", headers={"User-Agent": "..."}, proxy="http:
 uv run janus-capture --name my_chrome
 # 浏览器打开 https://localhost:8443/
 ```
+
+打开页面当场写出 `my_chrome.py`（`import my_chrome; my_chrome.session()`）和 `my_chrome.json`；页面脚本随后再开几轮新连接（`--rounds`，默认 4），补上扩展乱序和会话恢复（PSK）。不跑 JS 的客户端只打开一次也能出结果，notes 里会写明缺了什么。抓取时关掉系统代理（如 Reqable），否则抓到的是代理的指纹。
 
 ## 编译
 
