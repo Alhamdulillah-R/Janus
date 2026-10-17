@@ -13,15 +13,20 @@ rm -rf /root/janus/crates && tar xzf /root/janus/janus-ws.tgz
     uv run --with brotli --with zstandard python ../tools/test_server.py 8765 &
     uvx --python 3.12 pproxy -l http://127.0.0.1:8899 -l socks5://127.0.0.1:8898 &
     uv run --with h2 --with cryptography python ../tools/h2_echo_server.py 8766 &
+    openssl=/root/janus/build/openssl-linux/install/bin/openssl
+    uv run --with cryptography python ../tools/sct_server.py $openssl 8769 &
+    uv run --with cryptography python ../tools/sct_server.py $openssl 8770 -tls1_2 &
     for _ in $(seq 1 90); do
-        curl -s -o /dev/null http://127.0.0.1:8765/echo && nc -z 127.0.0.1 8899 && nc -z 127.0.0.1 8766 && break
+        curl -s -o /dev/null http://127.0.0.1:8765/echo && nc -z 127.0.0.1 8899 && nc -z 127.0.0.1 8766 && nc -z 127.0.0.1 8770 && break
         sleep 1
     done
-    uv run python ../tools/py_functional.py 8765 8899 8898 8766
+    uv run python ../tools/py_functional.py 8765 8899 8898 8766 8769
     status=$?
     pkill -f "test_server[.]py 8765"
     pkill -f "pproxy -l http"
     pkill -f "h2_echo_server[.]py 8766"
+    pkill -f "s_server -accept 87[67][09]"
+    pkill -f "sct_server[.]py"
     exit $status
 ) > /root/janus/py.log 2>&1
 echo EXIT=$? >> /root/janus/py.log

@@ -2,7 +2,9 @@
 Functional check of janus_requests's requests compatibility and fingerprint, against our own servers only:
 h2probe on the test machine, mignon-rex.tokyo, and tools/test_server.py on 127.0.0.1.
 
-usage: python py_functional.py <local-port> [http-proxy-port socks5-proxy-port [h2-echo-port]]
+usage: python py_functional.py <local-port> [http-proxy-port socks5-proxy-port [h2-echo-port [sct-port]]]
+
+sct-port runs tools/sct_server.py (TLS 1.3 and up), sct-port + 1 the same with -tls1_2.
 """
 
 import asyncio
@@ -583,6 +585,15 @@ def session_options(base: str, http_port: str | None, h2_echo: str | None) -> No
     check("read timeout single attempt", time.monotonic() - started < 1.8, round(time.monotonic() - started, 2))
 
 
+def sct(port: str) -> None:
+    """
+    Servers that answer the SCT extension Chrome sends from its raw body.
+    """
+    for version, server in (("TLSv1.3", int(port)), ("TLSv1.2", int(port) + 1)):
+        r = JanusSession().get(f"https://localhost:{server}/", timeout=15)
+        check(f"SCT answered over {version}", r.status_code == 200 and version in r.text, r.status_code)
+
+
 def proxies(base: str, http_port: str, socks_port: str) -> None:
     with requests.Session() as s:
         r = s.get(f"{h2probe}/api/get", proxies={"https": f"http://127.0.0.1:{http_port}"}, timeout=30)
@@ -659,6 +670,8 @@ if __name__ == "__main__":
     h2_echo = f"https://127.0.0.1:{sys.argv[4]}/upload" if len(sys.argv) > 4 else None
 
     fingerprint()
+    if len(sys.argv) > 5:
+        sct(sys.argv[5])
     local(base)
     cookies(base)
     session_options(base, sys.argv[2] if len(sys.argv) > 2 else None, h2_echo)

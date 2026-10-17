@@ -138,7 +138,7 @@ index e823a0f..3cb904a 100644
  # For shared builds we need to include the libcrypto packet.c and quic_vlint.c
 diff --git a/ssl/janus.c b/ssl/janus.c
 new file mode 100644
-index 0000000..0883392
+index 0000000..1d2fc60
 --- /dev/null
 +++ b/ssl/janus.c
 @@ -0,0 +1,901 @@
@@ -430,7 +430,7 @@ index 0000000..0883392
 +/**
 + * Whether the ClientHello carried extension |type| from its raw body.
 + */
-+static const JANUS_RAW_EXT *janus_sent_raw(const SSL_CONNECTION *s, uint16_t type)
++const JANUS_RAW_EXT *ossl_janus_sent_raw(const SSL_CONNECTION *s, uint16_t type)
 +{
 +    const JANUS_RAW_EXT *raw = ossl_janus_find_raw(&s->janus, type);
 +    const uint16_t *order;
@@ -488,7 +488,7 @@ index 0000000..0883392
 +        if (type != JANUS_EXT_ALPS && type != JANUS_EXT_ALPS_OLD)
 +            continue;
 +
-+        raw = janus_sent_raw(s, (uint16_t)type);
++        raw = ossl_janus_sent_raw(s, (uint16_t)type);
 +        if (raw == NULL) {
 +            SSLfatal(s, SSL_AD_UNSUPPORTED_EXTENSION, SSL_R_UNSOLICITED_EXTENSION);
 +            return 0;
@@ -1045,10 +1045,10 @@ index 0000000..0883392
 +}
 diff --git a/ssl/janus_local.h b/ssl/janus_local.h
 new file mode 100644
-index 0000000..b25ea64
+index 0000000..f4377c2
 --- /dev/null
 +++ b/ssl/janus_local.h
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,99 @@
 +/*
 + * Janus: client-side ClientHello shaping on top of OpenSSL.
 + *
@@ -1126,6 +1126,8 @@ index 0000000..b25ea64
 +int ossl_janus_config_remove_raw(JANUS_CONFIG *cfg, uint16_t type);
 +const JANUS_RAW_EXT *ossl_janus_find_raw(const JANUS_CONFIG *cfg,
 +    uint16_t type);
++/* the raw body of |type| if this connection's ClientHello carried it */
++const JANUS_RAW_EXT *ossl_janus_sent_raw(const SSL_CONNECTION *s, uint16_t type);
 +
 +void ossl_janus_state_free(JANUS_STATE *st);
 +int ossl_janus_new_hello(struct ssl_connection_st *s);
@@ -1242,10 +1244,10 @@ index 3c6e5d0..8110323 100644
          return "TRCKU";
      case TLS_ST_CR_KEY_UPDATE:
 diff --git a/ssl/statem/extensions.c b/ssl/statem/extensions.c
-index f9abfc3..30d07bc 100644
+index f9abfc3..d258bb3 100644
 --- a/ssl/statem/extensions.c
 +++ b/ssl/statem/extensions.c
-@@ -1031,6 +1031,122 @@ int should_add_extension(SSL_CONNECTION *s, unsigned int extctx,
+@@ -1031,6 +1031,125 @@ int should_add_extension(SSL_CONNECTION *s, unsigned int extctx,
      return 1;
  }
  
@@ -1294,16 +1296,19 @@ index f9abfc3..30d07bc 100644
 +            continue;
 +        }
 +
++        for (j = 0; j < OSSL_NELEM(ext_defs); j++) {
++            if (ext_defs[j].type == order[i])
++                break;
++        }
++
 +        raw = ossl_janus_find_raw(&s->janus, order[i]);
 +        if (raw != NULL) {
 +            if (!janus_put_raw(s, pkt, raw))
 +                return 0;
++            /* a built-in type sent from its raw body was still requested: its answer is not unsolicited */
++            if (j < OSSL_NELEM(ext_defs))
++                s->ext.extflags[j] |= SSL_EXT_FLAG_SENT;
 +            continue;
-+        }
-+
-+        for (j = 0; j < OSSL_NELEM(ext_defs); j++) {
-+            if (ext_defs[j].type == order[i])
-+                break;
 +        }
 +        if (j < OSSL_NELEM(ext_defs) && ext_defs[j].construct_ctos != NULL) {
 +            thisexd = &ext_defs[j];
@@ -1368,7 +1373,7 @@ index f9abfc3..30d07bc 100644
  /*
   * Construct all the extensions relevant to the current |context| and write
   * them to |pkt|. If this is an extension for a Certificate in a Certificate
-@@ -1047,6 +1163,7 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
+@@ -1047,6 +1166,7 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
      int min_version, max_version = 0, reason;
      const EXTENSION_DEFINITION *thisexd;
      int for_comp = (context & SSL_EXT_TLS1_3_CERTIFICATE_COMPRESSION) != 0;
@@ -1376,7 +1381,7 @@ index f9abfc3..30d07bc 100644
  #ifndef OPENSSL_NO_ECH
      int pass;
  #endif
-@@ -1084,10 +1201,31 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
+@@ -1084,10 +1204,31 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
          /* On the server side with initialise during ClientHello parsing */
          custom_ext_init(&s->cert->custext);
  #endif
@@ -1408,7 +1413,7 @@ index f9abfc3..30d07bc 100644
  
  #ifndef OPENSSL_NO_ECH
      /*
-@@ -1119,6 +1257,16 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
+@@ -1119,6 +1260,17 @@ int tls_construct_extensions(SSL_CONNECTION *s, WPACKET *pkt,
              if (!should_add_extension(s, thisexd->context, context, max_version))
                  continue;
  
@@ -1418,6 +1423,7 @@ index f9abfc3..30d07bc 100644
 +                if (raw != NULL) {
 +                    if (!janus_put_raw(s, pkt, raw))
 +                        return 0;
++                    s->ext.extflags[i] |= SSL_EXT_FLAG_SENT;
 +                    continue;
 +                }
 +            }
@@ -1426,7 +1432,7 @@ index f9abfc3..30d07bc 100644
                                    : thisexd->construct_ctos;
  
 diff --git a/ssl/statem/extensions_clnt.c b/ssl/statem/extensions_clnt.c
-index cf83109..79aa4b3 100644
+index cf83109..f4bf3da 100644
 --- a/ssl/statem/extensions_clnt.c
 +++ b/ssl/statem/extensions_clnt.c
 @@ -322,6 +322,19 @@ EXT_RETURN tls_construct_ctos_supported_groups(SSL_CONNECTION *s, WPACKET *pkt,
@@ -1585,6 +1591,20 @@ index cf83109..79aa4b3 100644
  #ifndef OPENSSL_NO_ECH
      /* stash inner key shares */
      if (s->ext.ech.ch_depth == 1 && ossl_ech_stash_keyshares(s) != 1) {
+@@ -1822,9 +1929,11 @@ int tls_parse_stoc_sct(SSL_CONNECTION *s, PACKET *pkt, unsigned int context,
+     /*
+      * Only take it if we asked for it - i.e if there is no CT validation
+      * callback set, then a custom extension MAY be processing it, so we
+-     * need to let control continue to flow to that.
++     * need to let control continue to flow to that. A Janus raw 0x0012 in
++     * the ClientHello asked for it too: keep the SCTs like the CT path does.
+      */
+-    if (s->ct_validation_callback != NULL) {
++    if (s->ct_validation_callback != NULL
++        || ossl_janus_sent_raw(s, TLSEXT_TYPE_signed_certificate_timestamp) != NULL) {
+         size_t size = PACKET_remaining(pkt);
+ 
+         /* Simply copy it off for later processing */
 diff --git a/ssl/statem/extensions_cust.c b/ssl/statem/extensions_cust.c
 index 71fb169..bb9e340 100644
 --- a/ssl/statem/extensions_cust.c

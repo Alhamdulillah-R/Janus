@@ -23,13 +23,16 @@ Push-Location $check
 Pop-Location
 if ($LASTEXITCODE -ne 0) { "py-check install failed" | Out-File $log; exit 1 }
 
+$openssl = "$root\build\openssl-msvc\install\bin\openssl.exe"
 $servers = @(
     (Start-Process -PassThru -WindowStyle Hidden -FilePath uv -ArgumentList 'run', '--no-project', '--with', 'brotli', '--with', 'zstandard', 'python', 'tools\test_server.py', '8765'),
     (Start-Process -PassThru -WindowStyle Hidden -FilePath uvx -ArgumentList '--python', '3.12', 'pproxy', '-l', 'http://127.0.0.1:8899', '-l', 'socks5://127.0.0.1:8898'),
-    (Start-Process -PassThru -WindowStyle Hidden -FilePath uv -ArgumentList 'run', '--no-project', '--with', 'h2', '--with', 'cryptography', 'python', 'tools\h2_echo_server.py', '8766')
+    (Start-Process -PassThru -WindowStyle Hidden -FilePath uv -ArgumentList 'run', '--no-project', '--with', 'h2', '--with', 'cryptography', 'python', 'tools\h2_echo_server.py', '8766'),
+    (Start-Process -PassThru -WindowStyle Hidden -FilePath uv -ArgumentList 'run', '--no-project', '--with', 'cryptography', 'python', 'tools\sct_server.py', $openssl, '8769'),
+    (Start-Process -PassThru -WindowStyle Hidden -FilePath uv -ArgumentList 'run', '--no-project', '--with', 'cryptography', 'python', 'tools\sct_server.py', $openssl, '8770', '-tls1_2')
 )
 
-$ports = 8765, 8899, 8766
+$ports = 8765, 8899, 8766, 8769, 8770
 foreach ($i in 1..120) {
     $up = @(Get-NetTCPConnection -State Listen -LocalPort $ports -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort -Unique)
     if ($up.Count -eq $ports.Count) { break }
@@ -37,7 +40,7 @@ foreach ($i in 1..120) {
 }
 
 try {
-    & uv run --project $check python tools\py_functional.py 8765 8899 8898 8766 *> $log
+    & uv run --project $check python tools\py_functional.py 8765 8899 8898 8766 8769 *> $log
     "EXIT=$LASTEXITCODE" | Out-File -Append $log
 }
 finally {
