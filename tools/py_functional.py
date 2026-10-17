@@ -425,6 +425,29 @@ def capture() -> None:
 
     expect_raise("capture name must be importable", ValueError, lambda: CaptureServer(port=8768, name="my-chrome"))
 
+    # a client that runs no JavaScript: one request to /janus-capture/now yields both profiles
+    nojs_dir = Path(tempfile.mkdtemp(prefix="janus-capture-nojs-"))
+    nojs = CaptureServer(port=8771, out_dir=nojs_dir, name="nojs")
+    threading.Thread(target=nojs.serve_forever, daemon=True).start()
+    with JanusSession(headers={"User-Agent": "nojs-now"}) as s:
+        r = s.get("https://localhost:8771/janus-capture/now")
+    nojs.shutdown()
+    nojs.server_close()
+
+    module = (nojs_dir / "nojs.py").read_text(encoding="utf-8") if (nojs_dir / "nojs.py").exists() else ""
+    generated: dict = {}
+    if module:
+        exec(module, generated)  # noqa: S102 - generated code under test
+    check(
+        "capture /janus-capture/now without JavaScript",
+        r.status_code == 200
+        and "captured from a single request" in module
+        and {n.lower(): v for n, v in generated["headers"].items()} == {"user-agent": "nojs-now"}
+        and generated["profile"].tls.ciphers == captured.tls.ciphers
+        and generated["profile"].tls.signature_algorithms == captured.tls.signature_algorithms,
+        list(generated.get("headers", {})),
+    )
+
 
 def listed_in_order(names: list[str], order: list[str]) -> bool:
     listed = [n for n in names if n in order]

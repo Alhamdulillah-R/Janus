@@ -136,6 +136,7 @@ class CaptureServer(socketserver.ThreadingTCPServer):
 <html><head><meta charset="utf-8"><title>Janus capture</title>
 <style>body{font-family:system-ui,sans-serif;margin:2em}pre{background:#f4f4f4;padding:1em;overflow:auto}</style>
 </head><body><p>capturing (needs JavaScript)</p>
+<p>a client that runs no JavaScript: open /janus-capture/now on this host, that single request becomes both profiles</p>
 <script>
 var xhr = new XMLHttpRequest();
 xhr.open("PUT", "/janus-capture/fetch?t=" + Date.now(), false);
@@ -153,16 +154,23 @@ document.body.innerHTML = xhr.responseText;
         fetch: list[tuple[str, str]],
         connection: ClientConnection | None,
         protocol: str,
+        single: bool = False,
     ) -> bytes:
         """
         Write `<name>.py` (importable) and the two profile JSON files; returns the report as an HTML fragment.
+
+        `single` publishes from this one request alone, for clients that run no JavaScript.
         """
-        with self.lock:
-            document = self.documents.get(group)
+        if single:
+            document = fetch
+        else:
+            with self.lock:
+                document = self.documents.get(group)
         if document is None:
             return b"<p>open / first: the page request was not captured for this browser</p>"
 
         builder = ProfileBuilder(hellos, self.name)
+        builder.single_request = single
         (navigation, headers), (fetch_profile, fetch_headers) = builder.build(document, fetch, connection)
         user_agent = next((v for n, v in document if n.lower() == "user-agent"), "(none)")
         summary = [
@@ -210,9 +218,16 @@ document.body.innerHTML = xhr.responseText;
         if path == "/":
             with self.lock:
                 self.documents[group] = headers
+            log.info(
+                "page served over %s: waiting for the page script to PUT /janus-capture/fetch, "
+                "a client without JavaScript opens /janus-capture/now instead",
+                protocol,
+            )
             return 200, self.page()
         if path.startswith("/janus-capture/fetch"):
             return 200, self.publish(group, hellos, headers, connection, protocol)
+        if path.startswith("/janus-capture/now"):
+            return 200, self.publish(group, hellos, headers, connection, protocol, single=True)
         return 404, b""
 
 

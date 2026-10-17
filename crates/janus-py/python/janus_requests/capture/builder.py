@@ -34,6 +34,8 @@ class ProfileBuilder:
         self.hellos = hellos
         self.name = name
         self.notes: list[str] = []
+        # one request from a client without JavaScript stands for both the page and the fetch
+        self.single_request = False
 
         # extensions the Janus kernel builds itself from the profile lists and flags
         self.native_extensions = {
@@ -98,6 +100,10 @@ class ProfileBuilder:
             http2=copy.deepcopy(http2),
             header_order=order,
         )
+        if self.single_request:
+            self.notes.append(
+                "captured from a single request (/janus-capture/now): fetch headers equal the page request, no JS client"
+            )
         return [(navigation, headers), (fetch_profile, fetch_headers)]
 
     def base_hello(self) -> ClientHello:
@@ -308,7 +314,7 @@ class ProfileBuilder:
 
         if "HeadlessChrome" in values.get("user-agent", ""):
             self.notes.append(f"{kind}: captured from headless Chrome, the user-agent says HeadlessChrome")
-        if kind == "fetch" and values.get("priority", "").startswith("u=0"):
+        if kind == "fetch" and not self.single_request and values.get("priority", "").startswith("u=0"):
             self.notes.append(
                 "fetch: the capture XHR is synchronous, which Chrome sends at u=0; fetch() and async XHR use u=1"
             )
