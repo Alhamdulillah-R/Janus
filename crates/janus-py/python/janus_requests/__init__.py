@@ -50,7 +50,7 @@ from .profile import (
 )
 from .sessions import AsyncResponse, AsyncSession, JanusAsyncSession, JanusSession, Session, session
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Claude Opus 5.5 & Mignon Rex"
 
 __all__ = [

@@ -1,6 +1,6 @@
 [package]
 name = "janus"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 description = "HTTP client with exact control over the TLS ClientHello (patched OpenSSL) and HTTP/2 framing"

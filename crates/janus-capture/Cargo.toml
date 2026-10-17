@@ -1,6 +1,6 @@
 [package]
 name = "janus-capture"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Local HTTPS server that captures a browser's ClientHello and HTTP/2 framing as Janus profiles"
